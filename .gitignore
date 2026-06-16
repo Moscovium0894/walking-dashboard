@@ -1,0 +1,27 @@
+# Secrets & credentials — NEVER commit these
+.env
+.env.*
+*.secret
+garmin_session/
+garth_session*
+token*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node / site build
+node_modules/
+site/dist/
+.cache/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Raw downloads we don't want in git (FIT files, scratch)
+data/raw/
+*.fit
