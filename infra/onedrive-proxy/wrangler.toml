@@ -3,8 +3,9 @@ main = "worker.js"
 compatibility_date = "2026-01-01"
 
 [vars]
-# Path of the workbook in the OneDrive drive (confirm the exact file name).
-FILE_PATH = "Documents/Granny Walking.xlsx"
+# Granny's "anyone with link" share URL (redeemed via Graph by the signed-in
+# account — no need for that account to be Granny's).
+SHARE_URL = "https://1drv.ms/x/c/1f677a749499d8fa/IQBtz3JP3HvlTZRgdgQnyHfFAdUHalPFEZxDfoU37ZPznNQ"
 # Restrict CORS to the site origin (use "*" to allow anywhere).
 ALLOW_ORIGIN = "https://moscovium0894.github.io"
 

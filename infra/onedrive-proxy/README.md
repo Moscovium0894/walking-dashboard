@@ -35,16 +35,17 @@ You'll do this once; after that it runs itself.
 cd infra/onedrive-proxy
 node get-refresh-token.mjs <MS_CLIENT_ID>
 ```
-It prints a short code and a URL. Visit the URL, enter the code, sign in as the
-account that owns the spreadsheet and approve **Files.Read** — it then prints
-`MS_REFRESH_TOKEN`.
+It prints a short code and a URL. Visit the URL, enter the code, sign in with
+**your own Microsoft account** (it doesn't have to be Granny's — Graph redeems
+her share link for any signed-in user) and approve **Files.Read.All** — it then
+prints `MS_REFRESH_TOKEN`.
 
 ### 3. Deploy the Worker
 ```bash
 npm i -g wrangler
 wrangler login
 wrangler kv namespace create TOKENS         # optional but recommended
-# edit wrangler.toml: set FILE_PATH, ALLOW_ORIGIN, and the KV id
+# edit wrangler.toml: set ALLOW_ORIGIN (and the KV id if using it)
 wrangler secret put MS_CLIENT_ID
 wrangler secret put MS_REFRESH_TOKEN
 wrangler deploy
@@ -60,8 +61,8 @@ and in `site/src/data/source.js` set `export const DATA_MODE = "proxy";`
 Commit & push — the site is now live from the spreadsheet.
 
 ## Notes
-- **`FILE_PATH`** is the workbook's path in the drive, e.g.
-  `Documents/Granny Walking.xlsx`. (Tell me the exact name and I'll confirm it.)
+- No file path needed — the Worker reads Granny's **share link** (`SHARE_URL` in
+  `wrangler.toml`, already filled in) via Graph `/shares`.
 - Binding the **TOKENS** KV namespace lets the Worker persist the rotating
   refresh token, so it never goes stale.
 - The Worker only ever returns this one file, with CORS limited to your site

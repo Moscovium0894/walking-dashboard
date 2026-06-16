@@ -42,8 +42,10 @@ export default {
 
     try {
       const accessToken = await getAccessToken(env);
-      const path = encodeURIComponent(env.FILE_PATH).replace(/%2F/g, "/");
-      const graphUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${path}:/content`;
+      // Redeem Granny's "anyone with link" share via Graph. Any signed-in
+      // account (e.g. the owner's) can read it this way — no need to be Granny.
+      const encoded = "u!" + btoa(env.SHARE_URL).replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+      const graphUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem/content`;
 
       const res = await fetch(graphUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -78,7 +80,7 @@ async function getAccessToken(env) {
     client_id: env.MS_CLIENT_ID,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    scope: "Files.Read offline_access",
+    scope: "Files.Read.All offline_access",
   });
 
   const res = await fetch(TOKEN_URL, {

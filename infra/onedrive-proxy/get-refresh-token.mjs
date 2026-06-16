@@ -15,7 +15,7 @@ if (!clientId) {
 }
 
 const BASE = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
-const scope = "Files.Read offline_access";
+const scope = "Files.Read.All offline_access";
 
 const dc = await (await fetch(`${BASE}/devicecode`, {
   method: "POST",
