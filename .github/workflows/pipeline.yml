@@ -1,0 +1,32 @@
+name: Garmin import pipeline
+
+# PLACEHOLDER — not active yet.
+#
+# When the Python pipeline (pipeline/) is built, this workflow will:
+#   1. Log in to Garmin Connect and download new activities
+#   2. Convert FIT -> GPX, compute distance, flag car/non-logging segments
+#   3. Upload tracks + rows into Supabase
+#
+# It will run on a daily schedule. For now it only runs when triggered by hand,
+# and just reports that the pipeline isn't implemented yet — so it never fails
+# silently on a timer.
+#
+# Secrets it will need (add later under Settings -> Secrets and variables -> Actions):
+#   GARMIN_TOKEN          captured Garmin session token (handles 2FA)
+#   SUPABASE_URL          your project URL
+#   SUPABASE_SERVICE_KEY  the secret service_role key (NOT the publishable key)
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 6 * * *"   # 06:00 UTC daily — uncomment once the pipeline exists
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pipeline not implemented yet
+        run: |
+          echo "The Garmin import pipeline has not been built yet."
+          echo "This workflow is a placeholder; see pipeline/ and docs/PLAN.md."
