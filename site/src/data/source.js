@@ -11,18 +11,19 @@
 // weather in the notes), so the dashboard looks and behaves the same when the
 // live sheet is wired in.
 //   "demo"     → rich generated sample data (default while we finalise wiring)
-//   "json"     → fetch a pre-built walks.json (RECOMMENDED: produced by a
-//                scheduled GitHub Action that reads the OneDrive workbook
-//                server-side, so there's no browser CORS problem). Same-origin.
-//   "onedrive" → live-fetch the workbook directly in the browser (prototype —
-//                currently NOT viable: the api.onedrive.com shares endpoint
-//                returns 401 for this share type and the raw 1drv.ms link is
-//                CORS-blocked. Kept for reference / if the link type changes.)
-//   "auto"     → try OneDrive, fall back to demo if the browser fetch fails.
+//   "proxy"    → LIVE on every refresh via the authenticated Cloudflare Worker
+//                (infra/onedrive-proxy/). The Worker holds a Microsoft token,
+//                downloads the workbook live and re-serves it with CORS. This is
+//                the "always live, no manual step" path — set ONEDRIVE_PROXY_URL
+//                in onedrive.js and flip DATA_MODE to "proxy".
+//   "onedrive" → direct browser fetch (kept for reference; currently 401s — the
+//                file is SharePoint-migrated and needs auth, though CORS is open).
+//   "json"     → fetch a pre-built walks.json (scheduled-import fallback).
+//   "auto"     → try the proxy, fall back to demo if it isn't reachable.
 // -----------------------------------------------------------------------------
 
 import { generateWalks } from "./demoData.js";
-import { fetchWorkbookBytes } from "./onedrive.js";
+import { fetchWorkbookBytes, fetchViaProxy } from "./onedrive.js";
 import { parseWorkbook } from "./parseWorkbook.js";
 import { weatherFromNotes } from "./labels.js";
 
@@ -30,17 +31,24 @@ export const DATA_MODE = "demo";
 export const USING_DEMO_DATA = DATA_MODE === "demo";
 
 export async function loadWalks() {
+  if (DATA_MODE === "proxy") return normalizeAll(await loadFromProxy());
   if (DATA_MODE === "json") return normalizeAll(await loadFromJson());
   if (DATA_MODE === "onedrive") return normalizeAll(await loadFromOneDrive());
   if (DATA_MODE === "auto") {
     try {
-      return normalizeAll(await loadFromOneDrive());
+      return normalizeAll(await loadFromProxy());
     } catch (e) {
-      console.warn("OneDrive fetch failed, using demo data:", e.message);
+      console.warn("Live fetch failed, using demo data:", e.message);
       return normalizeAll(generateWalks());
     }
   }
   return normalizeAll(generateWalks());
+}
+
+// LIVE: authenticated Worker → raw .xlsx → parse. No CORS issue, no stale cache.
+export async function loadFromProxy() {
+  const { walks } = parseWorkbook(await fetchViaProxy());
+  return walks;
 }
 
 // Fetch a pre-built walks.json sitting next to the site (same-origin, no CORS).

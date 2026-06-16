@@ -1,0 +1,19 @@
+name = "granny-walks"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Path of the workbook in the OneDrive drive (confirm the exact file name).
+FILE_PATH = "Documents/Granny Walking.xlsx"
+# Restrict CORS to the site origin (use "*" to allow anywhere).
+ALLOW_ORIGIN = "https://moscovium0894.github.io"
+
+# Recommended: persist the rotating refresh token so it never goes stale.
+# Create with: wrangler kv namespace create TOKENS  →  paste the id below.
+# [[kv_namespaces]]
+# binding = "TOKENS"
+# id = "<your-kv-namespace-id>"
+
+# Secrets (do NOT put here — set with `wrangler secret put`):
+#   MS_CLIENT_ID
+#   MS_REFRESH_TOKEN
