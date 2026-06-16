@@ -31,7 +31,7 @@ export default function LocationsMap({ locations }) {
             <Tooltip direction="top">
               <strong>{l.name}</strong>
               <br />
-              {l.walks} walks · {l.distance} km
+              {l.walks} walks · {l.distance} mi
             </Tooltip>
           </CircleMarker>
         ))}

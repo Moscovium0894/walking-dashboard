@@ -1,16 +1,19 @@
 // -----------------------------------------------------------------------------
-// DEMO DATA GENERATOR
+// DEMO DATA GENERATOR  (modelled on Granny's REAL spreadsheet)
 // -----------------------------------------------------------------------------
-// Realistic, varied sample walking data so the dashboard looks alive before
-// Granny's real spreadsheet lands. Everything is generated deterministically
-// (seeded PRNG) so the numbers are stable across page loads.
-//
-// This file only PRODUCES walk rows. It knows nothing about the UI. When the
-// real spreadsheet arrives, `src/data/source.js` stops calling this and reads
-// the sheet instead — the rest of the app is unchanged.
+// Realistic sample walks so the dashboard looks alive before the live OneDrive
+// fetch is switched on. Deliberately shaped like the real data:
+//   • distances in MILES (~1–14), West Country... no — Arnside/Silverdale/
+//     Morecambe Bay (Lancashire/Cumbria) place names,
+//   • footwear as code1 letters (n/b/s/sa/o/f) via the editable label lookup,
+//   • weather written into the free-text Notes (mined back out downstream),
+//   • a Start Time and "Time Taken", no elevation/step columns (the real sheet
+//     has none — steps are estimated, elevation is dropped).
+// Deterministic (seeded PRNG) so the numbers are stable across loads.
 // -----------------------------------------------------------------------------
 
-// Deterministic PRNG (mulberry32) so the demo is identical every load.
+import { lookupFootwear, PLACES } from "./labels.js";
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
@@ -22,172 +25,135 @@ function mulberry32(seed) {
   };
 }
 
-// Anchor the demo "today" so "this week / this month" always have data.
 const TODAY = new Date("2026-06-15T09:00:00");
 
-// Named local walks, each clustered around the same town (fictional home base
-// in the West Country). Coordinates are real-ish so the map looks right.
+// Real-ish routes around the Arnside/Silverdale/Morecambe Bay area. Each ties to
+// a Start Place that exists in the PLACES lookup so the map is populated.
 const ROUTES = [
-  { name: "Riverside Loop",      lat: 50.7720, lng: -3.9960, base: 4.2,  ascent: 35  },
-  { name: "Bluebell Wood",       lat: 50.7805, lng: -3.9740, base: 3.1,  ascent: 60  },
-  { name: "The Common",          lat: 50.7668, lng: -4.0120, base: 2.6,  ascent: 20  },
-  { name: "Canal Towpath",       lat: 50.7588, lng: -3.9805, base: 6.5,  ascent: 15  },
-  { name: "Hilltop Circuit",     lat: 50.7910, lng: -3.9520, base: 7.8,  ascent: 240 },
-  { name: "Church Lane & Back",  lat: 50.7702, lng: -3.9888, base: 1.8,  ascent: 25  },
-  { name: "Meadow Mile",         lat: 50.7635, lng: -3.9700, base: 1.6,  ascent: 10  },
-  { name: "Old Railway Trail",   lat: 50.7530, lng: -3.9420, base: 8.4,  ascent: 70  },
-  { name: "Seafront Stroll",     lat: 50.6190, lng: -3.4140, base: 5.0,  ascent: 30  },
-  { name: "Park Lap",            lat: 50.7745, lng: -3.9930, base: 2.0,  ascent: 12  },
-  { name: "Beacon Ridge",        lat: 50.8050, lng: -3.9100, base: 9.6,  ascent: 320 },
-  { name: "Millpond & Orchard",  lat: 50.7600, lng: -4.0050, base: 3.6,  ascent: 45  },
+  { name: "Home", baseMi: 2.2, weight: 101 },
+  { name: "Arnside", baseMi: 4.0, weight: 26 },
+  { name: "Silverdale", baseMi: 3.4, weight: 22 },
+  { name: "Morecambe", baseMi: 5.2, weight: 18 },
+  { name: "Milnthorpe", baseMi: 3.0, weight: 14 },
+  { name: "Holme", baseMi: 3.6, weight: 11 },
+  { name: "Levens Hall", baseMi: 4.8, weight: 9 },
+  { name: "Beetham Nurseries", baseMi: 2.6, weight: 8 },
+  { name: "Crooklands", baseMi: 5.6, weight: 7 },
+  { name: "Sizergh", baseMi: 6.2, weight: 7 },
+  { name: "Tesco", baseMi: 1.6, weight: 6 },
+  { name: "Jennifer's", baseMi: 2.0, weight: 9 },
 ];
 
-// Granny's shoe collection over the years. Each pair has a "bought" date; a walk
-// is attributed to whichever pair was the most recently bought on its date — so
-// pairs naturally retire as new ones arrive (~yearly, like real walking shoes,
-// giving each a believable few-hundred-mile life rather than thousands).
-const SHOES = [
-  { name: "Hoka Bondi 8 (lilac)",  from: "2025-10-01", color: "#a78bdb" },
-  { name: "Hoka Bondi 7 (blue)",   from: "2024-11-01", color: "#3b82f6" },
-  { name: "Brooks Ghost 15",       from: "2024-02-01", color: "#22a06b" },
-  { name: "Merrell Moab 3 (boot)", from: "2023-04-01", color: "#b45309" },
-  { name: "New Balance 880 v12",   from: "2022-05-01", color: "#ef4444" },
-  { name: "Asics Gel-Venture",     from: "2021-06-01", color: "#0ea5e9" },
-  { name: "Salomon X Ultra 4",     from: "2020-07-01", color: "#8b5cf6" },
-  { name: "Brooks Ghost 12",       from: "2019-08-01", color: "#16a34a" },
-  { name: "Hi-Tec Bandera (boot)", from: "2018-05-01", color: "#a16207" },
-  { name: "Karrimor Summit",       from: "2017-04-01", color: "#0891b2" },
-  { name: "New Balance 770",       from: "2015-09-01", color: "#dc2626" },
-  { name: "Merrell Siren (boot)",  from: "2013-05-01", color: "#92400e" },
-  { name: "Hi-Tec Penrith",        from: "2011-06-01", color: "#7c3aed" },
-  { name: "Clarks Wave (old)",     from: "2009-01-01", color: "#6b7280" },
+// Footwear codes with the same distribution flavour as the real sheet (n dominant).
+const FOOT_CODES = [
+  { code: "n", weight: 172 },
+  { code: "b", weight: 9 },
+  { code: "s", weight: 7 },
+  { code: "sa", weight: 5 },
+  { code: "o", weight: 2 },
+  { code: "f", weight: 1 },
 ];
 
-const WEATHERS = [
-  { name: "Sunny",  emoji: "☀️", weight: 5 },
-  { name: "Cloudy", emoji: "⛅", weight: 5 },
-  { name: "Rainy",  emoji: "🌧️", weight: 3 },
-  { name: "Windy",  emoji: "💨", weight: 2 },
-  { name: "Frosty", emoji: "❄️", weight: 1 },
+// Weather phrases dropped into Notes, seasonally weighted; downstream code mines
+// the category back out (proving the Notes-parsing path).
+const WEATHER_NOTES = [
+  { phrase: "Lovely and sunny", season: "summer" },
+  { phrase: "Bright and clear", season: "summer" },
+  { phrase: "Warm, a bit muggy", season: "summer" },
+  { phrase: "Grey and overcast", season: "any" },
+  { phrase: "Cloudy but dry", season: "any" },
+  { phrase: "Showers on and off", season: "any" },
+  { phrase: "Rain most of the way", season: "winter" },
+  { phrase: "Cold and breezy", season: "winter" },
+  { phrase: "Hard frost this morning", season: "winter" },
+  { phrase: "Misty over the bay", season: "any" },
+  { phrase: "Windy along the front", season: "any" },
 ];
 
-function pickWeather(rng, month) {
-  // Bias seasons a little: more frost in winter, more sun in summer.
-  const weights = WEATHERS.map((w) => {
-    let x = w.weight;
-    if (w.name === "Frosty") x += month <= 1 || month === 11 ? 4 : -1;
-    if (w.name === "Sunny") x += month >= 4 && month <= 8 ? 4 : 0;
-    if (w.name === "Rainy") x += month >= 9 && month <= 11 ? 2 : 0;
-    return Math.max(0.2, x);
-  });
-  const total = weights.reduce((a, b) => a + b, 0);
+function weightedPick(rng, items) {
+  const total = items.reduce((a, b) => a + b.weight, 0);
   let r = rng() * total;
-  for (let i = 0; i < WEATHERS.length; i++) {
-    if ((r -= weights[i]) <= 0) return WEATHERS[i];
-  }
-  return WEATHERS[0];
+  for (const it of items) if ((r -= it.weight) <= 0) return it;
+  return items[items.length - 1];
 }
 
-function shoeForDate(dateStr) {
-  // Most recently bought pair that already existed on this date.
-  let chosen = SHOES[SHOES.length - 1];
-  let best = -Infinity;
-  for (const s of SHOES) {
-    const t = new Date(s.from).getTime();
-    if (t <= new Date(dateStr).getTime() && t > best) {
-      best = t;
-      chosen = s;
-    }
-  }
-  return chosen;
+function seasonOf(month) {
+  if (month >= 5 && month <= 8) return "summer";
+  if (month <= 1 || month === 11) return "winter";
+  return "any";
 }
 
 function fmtDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-// Generate the full history: ~4–5 walks/week from 2009 to "today".
 export function generateWalks() {
   const rng = mulberry32(20260616);
   const walks = [];
-  const start = new Date("2009-01-05T00:00:00");
-  let id = 1;
+  const start = new Date("2016-01-09T00:00:00"); // history goes back to ~2016
 
-  for (
-    let day = new Date(start);
-    day <= TODAY;
-    day.setDate(day.getDate() + 1)
-  ) {
-    const dow = day.getDay(); // 0 Sun .. 6 Sat
+  for (let day = new Date(start); day <= TODAY; day.setDate(day.getDate() + 1)) {
+    const dow = day.getDay();
     const month = day.getMonth();
 
-    // Probability she walked today. Higher at weekends, lower deep winter.
-    let p = 0.55;
-    if (dow === 0 || dow === 6) p += 0.2;
+    let p = 0.5;
+    if (dow === 0 || dow === 6) p += 0.18;
     if (month === 0 || month === 1) p -= 0.12;
     if (month >= 5 && month <= 8) p += 0.1;
 
-    // Guarantee a tidy current streak: walk every day in the last 9 days.
     const daysToToday = Math.round((TODAY - day) / 86400000);
-    const forceWalk = daysToToday >= 0 && daysToToday < 9;
-
+    const forceWalk = daysToToday >= 0 && daysToToday < 9; // tidy current streak
     if (!forceWalk && rng() > p) continue;
 
-    const route = ROUTES[Math.floor(rng() * ROUTES.length)];
-    const dateStr = fmtDate(day);
+    const route = weightedPick(rng, ROUTES);
+    const long = rng() < 0.07 ? 1.5 : 1;
+    const distance = +(route.baseMi * (0.8 + rng() * 0.4) * long).toFixed(1); // MILES
 
-    // Distance: route base ± noise; occasional long-walk days.
-    const long = rng() < 0.08 ? 1.35 : 1;
-    const distance = +(route.base * (0.82 + rng() * 0.36) * long).toFixed(2);
+    // Pace ~17–22 min/mile (a steady amble), drifting a touch slower over years.
+    const yearsIn = day.getFullYear() - 2016;
+    const pace = 18.5 + yearsIn * 0.12 + (rng() - 0.5) * 2.4; // min/mile
+    const duration = Math.round(distance * pace);
 
-    // Pace minutes/km — Granny's brisk amble, varies with weather/age over years.
-    const yearsIn = day.getFullYear() - 2009;
-    const pace = 12.5 + yearsIn * 0.06 + (rng() - 0.5) * 1.6; // min/km
-    const duration = +(distance * pace).toFixed(0);
+    const startHour = rng() < 0.6 ? 8 + Math.floor(rng() * 3)
+                    : rng() < 0.8 ? 11 + Math.floor(rng() * 3)
+                    :               14 + Math.floor(rng() * 3);
+    const startMin = Math.floor(rng() * 60);
 
-    const ascent = Math.round(route.ascent * (0.7 + rng() * 0.7));
-    const steps = Math.round(distance * (1340 + rng() * 120));
+    const foot = weightedPick(rng, FOOT_CODES);
+    const meta = lookupFootwear(foot.code);
+    const place = PLACES[route.name.toLowerCase()] || null;
 
-    // Time of day, morning-weighted.
-    const r = rng();
-    const hour = r < 0.55 ? 7 + Math.floor(rng() * 4)   // morning 7–10
-              : r < 0.85 ? 11 + Math.floor(rng() * 4)   // midday 11–14
-              :            15 + Math.floor(rng() * 4);   // afternoon 15–18
+    const season = seasonOf(month);
+    const choices = WEATHER_NOTES.filter((w) => w.season === season || w.season === "any");
+    const note = choices[Math.floor(rng() * choices.length)].phrase;
 
-    const weather = pickWeather(rng, month);
-    const shoe = shoeForDate(dateStr);
-
-    // Small per-walk jitter on coordinates so map points spread a touch.
-    const lat = +(route.lat + (rng() - 0.5) * 0.012).toFixed(5);
-    const lng = +(route.lng + (rng() - 0.5) * 0.012).toFixed(5);
+    const lat = place ? +(place.lat + (rng() - 0.5) * 0.01).toFixed(5) : undefined;
+    const lng = place ? +(place.lng + (rng() - 0.5) * 0.01).toFixed(5) : undefined;
 
     walks.push({
-      id: id++,
-      garmin_activity_id: null,
-      walk_date: dateStr,
-      hour,
+      walk_date: fmtDate(day),
       name: route.name,
-      distance_km: distance,
-      duration_min: duration,
-      pace_min_km: +pace.toFixed(2),
-      ascent_m: ascent,
-      steps,
+      place: place ? place.label : route.name,
+      placeKey: route.name.toLowerCase(),
       lat,
       lng,
-      shoe: shoe.name,
-      shoe_color: shoe.color,
-      weather: weather.name,
-      weather_emoji: weather.emoji,
-      source: "historical",
-      status: "confirmed",
+      distance,                  // MILES (canonical)
+      duration_min: duration,
+      pace_min_mi: +pace.toFixed(2),
+      hour: startHour,
+      minute: startMin,
+      steps: Math.round(distance * 2050),
+      code1: foot.code,
+      code2: rng() < 0.97 ? "s" : "b",
+      shoe: meta.label,
+      shoe_color: meta.color,
+      shoe_emoji: meta.emoji,
+      weather: undefined,        // intentionally derived from notes downstream
+      notes: note,
+      description: `${route.name} loop`,
+      source: "demo",
     });
   }
 
   return walks;
 }
-
-export const DEMO_META = {
-  today: fmtDate(TODAY),
-  shoes: SHOES,
-  routes: ROUTES,
-};

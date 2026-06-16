@@ -1,4 +1,6 @@
-import StatCard from "./StatCard.jsx";
+import { useState } from "react";
+import StatTile from "./StatTile.jsx";
+import MetricDetail from "./MetricDetail.jsx";
 import MonthlyChart from "./MonthlyChart.jsx";
 import YearChart from "./YearChart.jsx";
 import DowChart from "./DowChart.jsx";
@@ -7,145 +9,179 @@ import ShoeStats from "./ShoeStats.jsx";
 import LocationsMap from "./LocationsMap.jsx";
 import FunFacts from "./FunFacts.jsx";
 import RecentWalks from "./RecentWalks.jsx";
+import { useInView } from "../hooks/useInView.js";
 
 const nf = (n) => n.toLocaleString("en-GB");
 
-export default function Dashboard({ stats, demo }) {
-  const t = stats.totals;
+// A full-bleed snap section that reveals itself as it scrolls into view.
+function Section({ children, className = "" }) {
+  const [ref, inView] = useInView();
   return (
-    <div className="page">
+    <section ref={ref} className={`snap-section reveal ${inView ? "in" : ""} ${className}`}>
+      <div className="section-inner">{children}</div>
+    </section>
+  );
+}
+
+export default function Dashboard({ stats, demo }) {
+  const [metric, setMetric] = useState(null);
+  const t = stats.totals;
+  const distanceMetric = stats.metrics.find((m) => m.id === "distance");
+
+  return (
+    <div className="snap-root">
       {demo && (
         <div className="demo-banner">
-          ✨ This is a <strong>preview with sample data</strong> — it’ll show Granny’s real walks once her spreadsheet is added.
+          ✨ Preview with <strong>sample data</strong> shaped like Granny’s real spreadsheet — her actual walks slot straight in.
         </div>
       )}
 
-      {/* Hero */}
-      <header className="hero">
-        <div className="hero-inner">
-          <div className="hero-kicker">🥾 Granny’s Walks</div>
-          <h1 className="hero-distance">{nf(t.distanceKm)} <span>km</span></h1>
-          <p className="hero-sub">
-            walked over <strong>{stats.yearsActive} years</strong> — that’s {nf(t.distanceMi)} miles
-            across <strong>{nf(t.walks)}</strong> walks since {stats.firstWalk.slice(0, 4)}.
-          </p>
-          <div className="hero-pills">
-            <span className="pill">🔥 {stats.streak}-day streak</span>
-            <span className="pill">📅 {stats.walksPerWeek} walks / week</span>
-            <span className="pill">⭐ Best year {stats.bestYear.label}: {nf(stats.bestYear.distance)} km</span>
+      {/* 1 — HERO */}
+      <Section className="hero-section">
+        <div className="hero">
+          <div className="hero-inner">
+            <div className="hero-kicker">🥾 Granny’s Walks</div>
+            <h1 className="hero-distance">{nf(Math.round(t.distanceMi / 100) * 100)} <span>miles</span></h1>
+            <p className="hero-sub">
+              walked over <strong>{stats.yearsActive} years</strong> across <strong>{nf(t.walks)}</strong> walks
+              since {stats.firstYear}.
+            </p>
+            <button className="hero-detail" onClick={() => setMetric(distanceMetric)}>
+              View detailed →
+            </button>
+            <div className="hero-pills">
+              <span className="pill">🔥 {stats.streak}-day streak</span>
+              <span className="pill">📅 {stats.walksPerWeek} walks / week</span>
+              <span className="pill">⭐ Best year {stats.bestYear.label}</span>
+            </div>
+            <div className="scroll-cue">scroll ↓</div>
           </div>
         </div>
-      </header>
+      </Section>
 
-      {/* Headline stat grid */}
-      <section className="stat-grid">
-        <StatCard emoji="🚶‍♀️" value={nf(t.walks)} label="Total walks" sub={`${stats.avgDistance} km average`} accent="#2f7d4f" />
-        <StatCard emoji="📏" value={nf(t.distanceKm)} unit=" km" label="Total distance" sub={`${nf(t.distanceMi)} miles`} accent="#4d8fd6" />
-        <StatCard emoji="⏱️" value={nf(t.durationHours)} unit=" hrs" label="Time on her feet" sub={`~${t.durationDays} days walking`} accent="#9b6bd1" />
-        <StatCard emoji="⛰️" value={nf(t.ascentM)} unit=" m" label="Total climb" sub="elevation gained" accent="#b45309" />
-        <StatCard emoji="👣" value={nf(t.steps)} label="Steps taken" sub="and counting" accent="#39b3a6" />
-        <StatCard emoji="🔥" value={stats.streak} unit=" days" label="Current streak" sub={`best ever: ${stats.bestStreak} days`} accent="#e06666" />
-        <StatCard emoji="🏅" value={stats.longest.distanceKm} unit=" km" label="Longest walk" sub={`${stats.longest.name}`} accent="#f4a72c" />
-        <StatCard emoji="🐢" value={stats.avgPaceLabel} label="Average pace" sub="steady does it" accent="#5aa06f" />
-      </section>
+      {/* 2 — HEADLINE STATS (tap any to drill down) */}
+      <Section>
+        <h2 className="section-title">The numbers <span className="hint">— tap any for detail</span></h2>
+        <div className="stat-grid">
+          {stats.metrics.map((m) => (
+            <StatTile key={m.id} metric={m} onOpen={setMetric} />
+          ))}
+        </div>
+      </Section>
 
-      {/* This week / month / year */}
-      <section className="period-row">
-        <div className="period-card">
-          <div className="period-label">This week</div>
-          <div className="period-value">{stats.thisWeek.distanceKm} <span>km</span></div>
-          <div className="period-sub">{stats.thisWeek.walks} walks</div>
+      {/* 3 — RECENT PERIODS */}
+      <Section>
+        <h2 className="section-title">Lately</h2>
+        <div className="period-row">
+          <div className="period-card">
+            <div className="period-label">This week</div>
+            <div className="period-value">{stats.thisWeek.distanceMi} <span>mi</span></div>
+            <div className="period-sub">{stats.thisWeek.walks} walks</div>
+          </div>
+          <div className="period-card">
+            <div className="period-label">{stats.thisMonth.label}</div>
+            <div className="period-value">{stats.thisMonth.distanceMi} <span>mi</span></div>
+            <div className="period-sub">{stats.thisMonth.walks} walks</div>
+          </div>
+          <div className="period-card">
+            <div className="period-label">This year</div>
+            <div className="period-value">{nf(stats.thisYear.distanceMi)} <span>mi</span></div>
+            <div className="period-sub">{stats.thisYear.walks} walks</div>
+          </div>
         </div>
-        <div className="period-card">
-          <div className="period-label">{stats.thisMonth.label}</div>
-          <div className="period-value">{stats.thisMonth.distanceKm} <span>km</span></div>
-          <div className="period-sub">{stats.thisMonth.walks} walks</div>
-        </div>
-        <div className="period-card">
-          <div className="period-label">This year</div>
-          <div className="period-value">{nf(stats.thisYear.distanceKm)} <span>km</span></div>
-          <div className="period-sub">{stats.thisYear.walks} walks</div>
-        </div>
-      </section>
+      </Section>
 
-      {/* Charts */}
-      <section className="cards-2">
-        <div className="card">
-          <h2>Last 12 months</h2>
-          <p className="card-note">Distance walked each month (km)</p>
-          <MonthlyChart data={stats.monthSeries} />
+      {/* 4 — CHARTS */}
+      <Section>
+        <h2 className="section-title">Over time</h2>
+        <div className="cards-2">
+          <div className="card">
+            <h2>Last 12 months</h2>
+            <p className="card-note">Miles walked each month</p>
+            <MonthlyChart data={stats.monthSeries} />
+          </div>
+          <div className="card">
+            <h2>Every year since {stats.firstYear}</h2>
+            <p className="card-note">⭐ {stats.bestYear.label} was the biggest year</p>
+            <YearChart data={stats.yearSeries} bestYear={stats.bestYear} />
+          </div>
         </div>
-        <div className="card">
-          <h2>Every year since {stats.firstWalk.slice(0, 4)}</h2>
-          <p className="card-note">⭐ {stats.bestYear.label} was the biggest year</p>
-          <YearChart data={stats.yearSeries} bestYear={stats.bestYear} />
-        </div>
-      </section>
+      </Section>
 
-      <section className="cards-3">
-        <div className="card">
-          <h2>Favourite days</h2>
-          <p className="card-note">⭐ {stats.favouriteDay.name}s most of all</p>
-          <DowChart data={stats.dow} favourite={stats.favouriteDay} />
+      {/* 5 — PATTERNS */}
+      <Section>
+        <h2 className="section-title">Patterns</h2>
+        <div className="cards-3">
+          <div className="card">
+            <h2>Favourite days</h2>
+            <p className="card-note">⭐ {stats.favouriteDay.name}s most of all</p>
+            <DowChart data={stats.dow} favourite={stats.favouriteDay} />
+          </div>
+          <div className="card">
+            <h2>Time of day</h2>
+            <p className="card-note">When Granny heads out</p>
+            <DonutChart data={stats.tod} />
+          </div>
+          <div className="card">
+            <h2>Walking weather</h2>
+            <p className="card-note">From her notes</p>
+            <DonutChart data={stats.weather} />
+          </div>
         </div>
-        <div className="card">
-          <h2>Time of day</h2>
-          <p className="card-note">When Granny heads out</p>
-          <DonutChart data={stats.tod} />
-        </div>
-        <div className="card">
-          <h2>Walking weather</h2>
-          <p className="card-note">Rain or shine</p>
-          <DonutChart data={stats.weather} />
-        </div>
-      </section>
+      </Section>
 
-      {/* Footwear */}
-      <section className="card">
-        <h2>👟 The shoe drawer</h2>
-        <p className="card-note">Miles walked in each pair over the years</p>
-        <ShoeStats shoes={stats.shoes} favourite={stats.favouriteShoe} current={stats.currentShoe} />
-      </section>
-
-      {/* Places */}
-      <section className="cards-2 places">
+      {/* 6 — FOOTWEAR */}
+      <Section>
+        <h2 className="section-title">👟 The shoe drawer</h2>
         <div className="card">
-          <h2>📍 Where she walks</h2>
-          <p className="card-note">⭐ {stats.favouritePlace.name} is the firm favourite ({stats.favouritePlace.walks} walks)</p>
-          <LocationsMap locations={stats.locations} />
+          <ShoeStats shoes={stats.shoes} favourite={stats.favouriteShoe} />
         </div>
-        <div className="card">
-          <h2>Most-visited spots</h2>
-          <ol className="place-list">
-            {stats.locations.slice(0, 8).map((l, i) => (
-              <li key={l.name}>
-                <span className="place-rank">{i + 1}</span>
-                <span className="place-name">{l.name}</span>
-                <span className="place-count">{l.walks} walks</span>
-                <span className="place-dist muted">{nf(l.distance)} km</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
+      </Section>
 
-      {/* Fun facts */}
-      <section>
+      {/* 7 — PLACES */}
+      <Section>
+        <h2 className="section-title">📍 Where she walks</h2>
+        <div className="cards-2 places">
+          <div className="card">
+            <p className="card-note">⭐ {stats.favouritePlace.name} is the firm favourite ({stats.favouritePlace.walks} walks)</p>
+            <LocationsMap locations={stats.locations} />
+          </div>
+          <div className="card">
+            <h2>Most-visited spots</h2>
+            <ol className="place-list">
+              {stats.locations.slice(0, 8).map((l, i) => (
+                <li key={l.name}>
+                  <span className="place-rank">{i + 1}</span>
+                  <span className="place-name">{l.name}</span>
+                  <span className="place-count">{l.walks} walks</span>
+                  <span className="place-dist muted">{nf(l.distance)} mi</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </Section>
+
+      {/* 8 — FUN FACTS */}
+      <Section>
         <h2 className="section-title">✨ Fun facts</h2>
         <FunFacts facts={stats.funFacts} />
-      </section>
+      </Section>
 
-      {/* Recent walks */}
-      <section className="card">
-        <h2>Recent walks</h2>
-        <p className="card-note">The latest dozen</p>
-        <RecentWalks walks={stats.recent} />
-      </section>
+      {/* 9 — RECENT WALKS */}
+      <Section>
+        <h2 className="section-title">Recent walks</h2>
+        <div className="card">
+          <RecentWalks walks={stats.recent} />
+        </div>
+      </Section>
 
       <footer className="foot">
-        Made with 💚 for Granny · {nf(t.walks)} walks since {stats.firstWalk.slice(0, 4)}
+        Made with 💚 for Granny · {nf(t.walks)} walks since {stats.firstYear}
         {demo && " · sample data"}
       </footer>
+
+      {metric && <MetricDetail metric={metric} onClose={() => setMetric(null)} />}
     </div>
   );
 }

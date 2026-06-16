@@ -1,59 +1,55 @@
 // -----------------------------------------------------------------------------
-// STATS ENGINE — turns a list of normalized walks into every number the
-// dashboard shows. Pure functions, no UI. Works for demo data today and the
-// real spreadsheet later, unchanged.
+// STATS ENGINE — normalized walks → every number the dashboard shows.
+// Canonical unit is MILES. No elevation/steps columns exist in the real sheet,
+// so elevation is dropped and steps are an estimate. Pure functions, no UI.
+// Also builds per-metric DRILL-DOWN descriptors (yearly breakdown + plain-English
+// explanation + exact value for the rolling odometer).
 // -----------------------------------------------------------------------------
+
+import { lookupFootwear } from "./labels.js";
 
 const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const sum = (arr, f) => arr.reduce((a, x) => a + (f ? f(x) : x), 0);
-const km2mi = (km) => km * 0.621371;
+const mi2km = (mi) => mi * 1.60934;
 
 export function computeStats(walks) {
   if (!walks.length) return null;
 
-  // "Today" = the most recent walk date, so this-week/month always have data.
   const dates = walks.map((w) => w.walk_date).sort();
   const lastDate = new Date(dates[dates.length - 1] + "T12:00:00");
   const firstDate = new Date(dates[0] + "T12:00:00");
+  const dayMs = 86400000;
 
-  const totalDistance = sum(walks, (w) => w.distance_km);
-  const totalDuration = sum(walks, (w) => w.duration_min || 0);
+  const totalDistance = sum(walks, (w) => w.distance);          // miles
+  const totalDuration = sum(walks, (w) => w.duration_min || 0); // minutes
   const totalSteps = sum(walks, (w) => w.steps || 0);
-  const totalAscent = sum(walks, (w) => w.ascent_m || 0);
   const count = walks.length;
 
-  const dayMs = 86400000;
-  const within = (w, days) =>
-    (lastDate - new Date(w.walk_date + "T12:00:00")) / dayMs < days;
-
+  const within = (w, days) => (lastDate - new Date(w.walk_date + "T12:00:00")) / dayMs < days;
   const thisWeek = walks.filter((w) => within(w, 7));
   const thisMonthKey = lastDate.toISOString().slice(0, 7);
   const thisMonth = walks.filter((w) => w.walk_date.slice(0, 7) === thisMonthKey);
   const thisYearKey = lastDate.getFullYear();
   const thisYear = walks.filter((w) => +w.walk_date.slice(0, 4) === thisYearKey);
 
-  const longest = walks.reduce((a, b) => (b.distance_km > a.distance_km ? b : a));
+  const longest = walks.reduce((a, b) => (b.distance > a.distance ? b : a));
 
-  // Weighted average pace (min/km), and a friendly average distance.
-  const pacedWalks = walks.filter((w) => w.duration_min && w.distance_km);
-  const avgPace =
-    pacedWalks.length
-      ? sum(pacedWalks, (w) => w.duration_min) / sum(pacedWalks, (w) => w.distance_km)
-      : 0;
+  const pacedWalks = walks.filter((w) => w.duration_min && w.distance);
+  const avgPace = pacedWalks.length
+    ? sum(pacedWalks, (w) => w.duration_min) / sum(pacedWalks, (w) => w.distance)
+    : 0;
   const avgDistance = totalDistance / count;
 
-  // Current streak: consecutive days ending at lastDate that have a walk.
+  // Streaks (consecutive calendar days with a walk).
   const daySet = new Set(dates);
   let streak = 0;
   for (let d = new Date(lastDate); ; d.setDate(d.getDate() - 1)) {
     if (daySet.has(d.toISOString().slice(0, 10))) streak++;
     else break;
   }
-
-  // Longest-ever streak.
   const sortedDays = [...daySet].sort();
   let best = 0, run = 0, prev = null;
   for (const ds of sortedDays) {
@@ -63,48 +59,48 @@ export function computeStats(walks) {
     prev = ds;
   }
 
-  // Per year.
-  const byYear = groupAgg(walks, (w) => w.walk_date.slice(0, 4));
-  const years = Object.keys(byYear).sort();
-  const yearSeries = years.map((y) => ({
-    label: y,
-    distance: round(byYear[y].distance),
-    walks: byYear[y].count,
-  }));
+  // Per-year aggregates (used widely + for drill-downs).
+  const years = [...new Set(dates.map((d) => d.slice(0, 4)))].sort();
+  const yearAgg = years.map((y) => {
+    const ws = walks.filter((w) => w.walk_date.slice(0, 4) === y);
+    const paced = ws.filter((w) => w.duration_min && w.distance);
+    return {
+      label: y,
+      walks: ws.length,
+      distance: round(sum(ws, (w) => w.distance)),
+      hours: round(sum(ws, (w) => w.duration_min || 0) / 60),
+      steps: Math.round(sum(ws, (w) => w.steps || 0)),
+      longest: ws.length ? round(Math.max(...ws.map((w) => w.distance))) : 0,
+      pace: paced.length ? round(sum(paced, (w) => w.duration_min) / sum(paced, (w) => w.distance), 1) : 0,
+    };
+  });
+  const yearSeries = yearAgg.map((y) => ({ label: y.label, distance: y.distance, walks: y.walks }));
   const bestYear = yearSeries.reduce((a, b) => (b.distance > a.distance ? b : a));
 
-  // Last 12 months for the headline chart.
+  // Last 12 months.
   const monthSeries = lastNMonths(lastDate, 12).map((key) => {
     const ws = walks.filter((w) => w.walk_date.slice(0, 7) === key);
     const [y, m] = key.split("-");
-    return {
-      key,
-      label: `${MONTHS[+m - 1]} ${y.slice(2)}`,
-      distance: round(sum(ws, (w) => w.distance_km)),
-      walks: ws.length,
-    };
+    return { key, label: `${MONTHS[+m - 1]} ${y.slice(2)}`, distance: round(sum(ws, (w) => w.distance)), walks: ws.length };
   });
 
   // Day of week.
   const dow = DOW.map((name, i) => {
     const ws = walks.filter((w) => new Date(w.walk_date + "T12:00:00").getDay() === i);
-    return { name, short: DOW_SHORT[i], walks: ws.length, distance: round(sum(ws, (w) => w.distance_km)) };
+    return { name, short: DOW_SHORT[i], walks: ws.length, distance: round(sum(ws, (w) => w.distance)) };
   });
   const favouriteDay = dow.reduce((a, b) => (b.walks > a.walks ? b : a));
 
-  // Time of day.
+  // Time of day (from Start Time).
   const tod = [
     { name: "Morning",   emoji: "🌅", test: (h) => h >= 5 && h < 11 },
-    { name: "Midday",    emoji: "🌞", test: (h) => h >= 11 && h < 15 },
-    { name: "Afternoon", emoji: "🌤️", test: (h) => h >= 15 && h < 19 },
-    { name: "Evening",   emoji: "🌙", test: (h) => h >= 19 || h < 5 },
-  ].map((b) => ({
-    name: b.name,
-    emoji: b.emoji,
-    value: walks.filter((w) => Number.isFinite(w.hour) && b.test(w.hour)).length,
-  })).filter((b) => b.value > 0);
+    { name: "Midday",    emoji: "🌞", test: (h) => h >= 11 && h < 14 },
+    { name: "Afternoon", emoji: "🌤️", test: (h) => h >= 14 && h < 18 },
+    { name: "Evening",   emoji: "🌙", test: (h) => h >= 18 || h < 5 },
+  ].map((b) => ({ name: b.name, emoji: b.emoji, value: walks.filter((w) => Number.isFinite(w.hour) && b.test(w.hour)).length }))
+   .filter((b) => b.value > 0);
 
-  // Weather.
+  // Weather (mined from notes upstream).
   const weatherMap = {};
   for (const w of walks) {
     if (!w.weather) continue;
@@ -113,115 +109,125 @@ export function computeStats(walks) {
   }
   const weather = Object.values(weatherMap).sort((a, b) => b.value - a.value);
 
-  // Footwear.
+  // Footwear (from code1).
   const shoeMap = {};
   for (const w of walks) {
-    if (!w.shoe) continue;
-    const s = (shoeMap[w.shoe] = shoeMap[w.shoe] || {
-      name: w.shoe, color: w.shoe_color || "#16a34a", walks: 0, distance: 0, first: w.walk_date, last: w.walk_date,
-    });
+    const key = w.shoe || lookupFootwear(w.code1).label;
+    const s = (shoeMap[key] = shoeMap[key] || { name: key, color: w.shoe_color || "#2f7d4f", emoji: w.shoe_emoji || "👟", walks: 0, distance: 0 });
     s.walks++;
-    s.distance += w.distance_km;
-    if (w.walk_date < s.first) s.first = w.walk_date;
-    if (w.walk_date > s.last) s.last = w.walk_date;
+    s.distance += w.distance;
   }
-  const shoes = Object.values(shoeMap)
-    .map((s) => ({ ...s, distance: round(s.distance), miles: round(km2mi(s.distance)) }))
-    .sort((a, b) => b.distance - a.distance);
+  const shoes = Object.values(shoeMap).map((s) => ({ ...s, distance: round(s.distance) })).sort((a, b) => b.distance - a.distance);
   const favouriteShoe = shoes[0];
-  const lastWalkDate = dates[dates.length - 1];
-  const currentShoe = shoes.find((s) => s.last === lastWalkDate) || shoes[0];
 
-  // Locations (grouped by route name, averaged coords for the map).
+  // Locations (by place).
   const locMap = {};
   for (const w of walks) {
-    const l = (locMap[w.name] = locMap[w.name] || {
-      name: w.name, walks: 0, distance: 0, latSum: 0, lngSum: 0, n: 0,
-    });
+    const key = w.place || w.name || "—";
+    const l = (locMap[key] = locMap[key] || { name: key, walks: 0, distance: 0, lat: w.lat, lng: w.lng });
     l.walks++;
-    l.distance += w.distance_km;
-    if (Number.isFinite(w.lat)) { l.latSum += w.lat; l.lngSum += w.lng; l.n++; }
+    l.distance += w.distance;
+    if (Number.isFinite(w.lat)) { l.lat = w.lat; l.lng = w.lng; }
   }
-  const locations = Object.values(locMap)
-    .map((l) => ({
-      name: l.name,
-      walks: l.walks,
-      distance: round(l.distance),
-      lat: l.n ? l.latSum / l.n : undefined,
-      lng: l.n ? l.lngSum / l.n : undefined,
-    }))
-    .sort((a, b) => b.walks - a.walks);
+  const locations = Object.values(locMap).map((l) => ({ ...l, distance: round(l.distance) })).sort((a, b) => b.walks - a.walks);
   const favouritePlace = locations[0];
 
-  // Recent walks (newest first).
   const recent = [...walks].sort((a, b) => b.walk_date.localeCompare(a.walk_date)).slice(0, 12);
 
   const yearsActive = (lastDate - firstDate) / (365.25 * dayMs);
   const walksPerWeek = count / Math.max(1, (lastDate - firstDate) / (7 * dayMs));
 
+  // --- Drill-down metric descriptors ---------------------------------------
+  const yb = (field) => yearAgg.map((y) => ({ label: y.label, value: y[field] }));
+  const metrics = [
+    {
+      id: "distance", emoji: "📏", label: "Total distance", accent: "#2f7d4f",
+      exact: totalDistance, unit: " mi", decimals: 1, roundTo: 100,
+      explain: `Every mile Granny has walked and logged since ${years[0]} — that's about ${Math.round(mi2km(totalDistance)).toLocaleString()} km.`,
+      yearly: yb("distance"), yearlyLabel: "Miles per year",
+    },
+    {
+      id: "walks", emoji: "🚶‍♀️", label: "Total walks", accent: "#4d8fd6",
+      exact: count, unit: "", decimals: 0, roundTo: 10,
+      explain: `Each separate walk she recorded. She averages ${round(walksPerWeek, 1)} walks a week and ${round(avgDistance, 1)} miles a walk.`,
+      yearly: yb("walks"), yearlyLabel: "Walks per year",
+    },
+    {
+      id: "time", emoji: "⏱️", label: "Time on her feet", accent: "#9b6bd1",
+      exact: totalDuration / 60, unit: " hrs", decimals: 1, roundTo: 10,
+      explain: `Total walking time — roughly ${round(totalDuration / 60 / 24, 1)} whole days out on the paths.`,
+      yearly: yb("hours"), yearlyLabel: "Hours per year",
+    },
+    {
+      id: "steps", emoji: "👣", label: "Steps (est.)", accent: "#39b3a6",
+      exact: totalSteps, unit: "", decimals: 0, roundTo: 1000,
+      explain: "Estimated from distance (about 2,050 steps a mile) — the spreadsheet doesn't record steps directly.",
+      yearly: yb("steps"), yearlyLabel: "Steps per year",
+    },
+    {
+      id: "streak", emoji: "🔥", label: "Current streak", accent: "#e06666",
+      exact: streak, unit: " days", decimals: 0, roundTo: 1,
+      explain: `Consecutive days with a walk, right up to her latest. Her best ever run is ${best} days in a row.`,
+      yearly: yb("walks"), yearlyLabel: "Walks per year",
+    },
+    {
+      id: "longest", emoji: "🏅", label: "Longest walk", accent: "#f4a72c",
+      exact: longest.distance, unit: " mi", decimals: 1, roundTo: 1,
+      explain: `Her single longest walk: ${round(longest.distance, 1)} miles from ${longest.name} on ${prettyDate(longest.walk_date)}.`,
+      yearly: yb("longest"), yearlyLabel: "Longest walk each year (mi)",
+    },
+    {
+      id: "pace", emoji: "🐢", label: "Average pace", accent: "#5aa06f",
+      exact: avgPace, unit: " /mi", decimals: 1, roundTo: 1, isPace: true,
+      explain: "Her typical minutes-per-mile — a steady, enjoyable amble rather than a race.",
+      yearly: yearAgg.map((y) => ({ label: y.label, value: y.pace })), yearlyLabel: "Average pace each year (min/mi)",
+    },
+    {
+      id: "thisYear", emoji: "📅", label: `${thisYearKey} so far`, accent: "#0ea5e9",
+      exact: round(sum(thisYear, (w) => w.distance)), unit: " mi", decimals: 1, roundTo: 10,
+      explain: `Miles walked in ${thisYearKey} so far, across ${thisYear.length} walks.`,
+      yearly: yb("distance"), yearlyLabel: "Miles per year",
+    },
+  ];
+
   return {
     today: lastDate.toISOString().slice(0, 10),
     firstWalk: dates[0],
+    firstYear: years[0],
     yearsActive: round(yearsActive, 1),
 
     totals: {
       walks: count,
-      distanceKm: round(totalDistance),
-      distanceMi: round(km2mi(totalDistance)),
+      distanceMi: round(totalDistance),
+      distanceKm: round(mi2km(totalDistance)),
       durationMin: Math.round(totalDuration),
       durationHours: round(totalDuration / 60),
       durationDays: round(totalDuration / 60 / 24, 1),
       steps: Math.round(totalSteps),
-      ascentM: Math.round(totalAscent),
     },
 
-    thisWeek: { walks: thisWeek.length, distanceKm: round(sum(thisWeek, (w) => w.distance_km)) },
-    thisMonth: { walks: thisMonth.length, distanceKm: round(sum(thisMonth, (w) => w.distance_km)), label: `${MONTHS[lastDate.getMonth()]} ${lastDate.getFullYear()}` },
-    thisYear: { walks: thisYear.length, distanceKm: round(sum(thisYear, (w) => w.distance_km)) },
+    thisWeek: { walks: thisWeek.length, distanceMi: round(sum(thisWeek, (w) => w.distance)) },
+    thisMonth: { walks: thisMonth.length, distanceMi: round(sum(thisMonth, (w) => w.distance)), label: `${MONTHS[lastDate.getMonth()]} ${lastDate.getFullYear()}` },
+    thisYear: { walks: thisYear.length, distanceMi: round(sum(thisYear, (w) => w.distance)) },
 
     avgPace: round(avgPace, 1),
     avgPaceLabel: paceLabel(avgPace),
-    avgDistance: round(avgDistance),
+    avgDistance: round(avgDistance, 1),
     walksPerWeek: round(walksPerWeek, 1),
 
-    longest: { name: longest.name, distanceKm: round(longest.distance_km), date: longest.walk_date },
+    longest: { name: longest.name, distanceMi: round(longest.distance), date: longest.walk_date },
     streak,
     bestStreak: best,
 
-    yearSeries,
-    bestYear,
-    monthSeries,
-    dow,
-    favouriteDay,
-    tod,
-    weather,
-    shoes,
-    favouriteShoe,
-    currentShoe,
-    locations,
-    favouritePlace,
-    recent,
-
-    funFacts: funFacts({ totalDistance, totalAscent, totalSteps, totalDuration }),
+    yearSeries, bestYear, monthSeries, dow, favouriteDay, tod, weather,
+    shoes, favouriteShoe, locations, favouritePlace, recent,
+    metrics,
+    funFacts: funFacts({ totalDistance, totalSteps, totalDuration }),
   };
 }
 
 // --- helpers ----------------------------------------------------------------
-function round(n, dp = 1) {
-  const f = Math.pow(10, dp);
-  return Math.round(n * f) / f;
-}
-
-function groupAgg(walks, keyFn) {
-  const out = {};
-  for (const w of walks) {
-    const k = keyFn(w);
-    out[k] = out[k] || { count: 0, distance: 0 };
-    out[k].count++;
-    out[k].distance += w.distance_km;
-  }
-  return out;
-}
+function round(n, dp = 1) { const f = Math.pow(10, dp); return Math.round(n * f) / f; }
 
 function lastNMonths(endDate, n) {
   const keys = [];
@@ -233,50 +239,30 @@ function lastNMonths(endDate, n) {
   return keys;
 }
 
-export function paceLabel(minPerKm) {
-  if (!minPerKm) return "—";
-  const m = Math.floor(minPerKm);
-  const s = Math.round((minPerKm - m) * 60);
-  return `${m}:${String(s).padStart(2, "0")} /km`;
+export function paceLabel(minPerMile) {
+  if (!minPerMile) return "—";
+  const m = Math.floor(minPerMile);
+  const s = Math.round((minPerMile - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")} /mi`;
 }
 
-function funFacts({ totalDistance, totalAscent, totalSteps, totalDuration }) {
-  const EVEREST = 8849;        // m, height above sea level
-  const LEJOG = 1407;          // km, Land's End → John o' Groats
-  const EARTH = 40075;         // km, equatorial circumference
-  const MOON = 384400;         // km
-  const EIFFEL_STAIRS = 1665;  // steps to the top
+function prettyDate(iso) {
+  return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+
+function funFacts({ totalDistance, totalSteps, totalDuration }) {
+  const LEJOG = 874;          // miles, Land's End → John o' Groats
+  const EARTH = 24901;        // miles, equator
+  const MOON = 238855;        // miles
+  const BAY = 8;              // miles, the classic Morecambe Bay cross-sands walk
+  const EIFFEL_STAIRS = 1665; // steps to the top
 
   return [
-    {
-      emoji: "🏔️",
-      headline: `${(totalAscent / EVEREST).toFixed(1)}×`,
-      text: `the height of Everest climbed — ${Math.round(totalAscent).toLocaleString()} m of ascent in all.`,
-    },
-    {
-      emoji: "🏴",
-      headline: `${(totalDistance / LEJOG).toFixed(1)}×`,
-      text: `the length of Britain — far enough to walk Land's End to John o' Groats ${(totalDistance / LEJOG).toFixed(1)} times.`,
-    },
-    {
-      emoji: "🌍",
-      headline: `${((totalDistance / EARTH) * 100).toFixed(1)}%`,
-      text: `of the way around the whole world (${Math.round(totalDistance).toLocaleString()} km of ${EARTH.toLocaleString()} km).`,
-    },
-    {
-      emoji: "👣",
-      headline: `${Math.round(totalSteps).toLocaleString()}`,
-      text: `steps taken — that's the Eiffel Tower's stairs climbed ${Math.round(totalSteps / EIFFEL_STAIRS).toLocaleString()} times.`,
-    },
-    {
-      emoji: "⏱️",
-      headline: `${Math.round(totalDuration / 60).toLocaleString()} hrs`,
-      text: `spent walking — about ${(totalDuration / 60 / 24).toFixed(0)} full days on the move.`,
-    },
-    {
-      emoji: "🚀",
-      headline: `${((totalDistance / MOON) * 100).toFixed(3)}%`,
-      text: `of the way to the Moon — every step counts!`,
-    },
+    { emoji: "🏴", headline: `${(totalDistance / LEJOG).toFixed(1)}×`, text: `the length of Britain — far enough to walk Land's End to John o' Groats ${(totalDistance / LEJOG).toFixed(1)} times.` },
+    { emoji: "🌊", headline: `${Math.round(totalDistance / BAY).toLocaleString()}×`, text: `across Morecambe Bay — that many crossings of the famous cross-sands walk on her doorstep.` },
+    { emoji: "🌍", headline: `${((totalDistance / EARTH) * 100).toFixed(1)}%`, text: `of the way around the whole world (${Math.round(totalDistance).toLocaleString()} of ${EARTH.toLocaleString()} miles).` },
+    { emoji: "👣", headline: `${Math.round(totalSteps).toLocaleString()}`, text: `steps taken — like climbing the Eiffel Tower's stairs ${Math.round(totalSteps / EIFFEL_STAIRS).toLocaleString()} times.` },
+    { emoji: "⏱️", headline: `${Math.round(totalDuration / 60).toLocaleString()} hrs`, text: `spent walking — about ${(totalDuration / 60 / 24).toFixed(0)} full days on the move.` },
+    { emoji: "🚀", headline: `${((totalDistance / MOON) * 100).toFixed(2)}%`, text: `of the way to the Moon — every single step counts!` },
   ];
 }

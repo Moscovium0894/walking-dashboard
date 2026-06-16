@@ -5,27 +5,30 @@ const fmt = (iso) =>
     weekday: "short", day: "numeric", month: "short", year: "numeric",
   });
 
-// The latest walks as a clean, readable table.
+const clock = (h, m) =>
+  Number.isFinite(h) ? `${String(h).padStart(2, "0")}:${String(m ?? 0).padStart(2, "0")}` : "—";
+
+// The latest walks as a clean, readable table (real spreadsheet columns).
 export default function RecentWalks({ walks }) {
   return (
     <div className="table-wrap">
       <table className="walks-table">
         <thead>
           <tr>
-            <th>Date</th><th>Walk</th><th className="num">Distance</th>
-            <th className="num">Time</th><th className="num">Pace</th>
-            <th className="num">Climb</th><th>Weather</th><th>Shoes</th>
+            <th>Date</th><th>From</th><th className="num">Distance</th>
+            <th className="num">Start</th><th className="num">Time</th>
+            <th className="num">Pace</th><th>Weather</th><th>Footwear</th>
           </tr>
         </thead>
         <tbody>
-          {walks.map((w) => (
-            <tr key={w.walk_date + w.name}>
+          {walks.map((w, i) => (
+            <tr key={w.walk_date + w.name + i}>
               <td>{fmt(w.walk_date)}</td>
-              <td className="strong">{w.name}</td>
-              <td className="num">{w.distance_km} km</td>
-              <td className="num">{w.duration_min} min</td>
-              <td className="num">{paceLabel(w.pace_min_km)}</td>
-              <td className="num">{w.ascent_m} m</td>
+              <td className="strong">{w.place || w.name}</td>
+              <td className="num">{w.distance} mi</td>
+              <td className="num">{clock(w.hour, w.minute)}</td>
+              <td className="num">{w.duration_min ? `${w.duration_min} min` : "—"}</td>
+              <td className="num">{paceLabel(w.pace_min_mi)}</td>
               <td>{w.weather_emoji} {w.weather}</td>
               <td className="muted">{w.shoe}</td>
             </tr>

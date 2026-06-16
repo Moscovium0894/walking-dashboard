@@ -11,7 +11,7 @@ export default function DowChart({ data, favourite }) {
         <XAxis dataKey="short" tick={{ fontSize: 13, fill: "#6b6256" }} />
         <YAxis tick={{ fontSize: 12, fill: "#6b6256" }} width={40} allowDecimals={false} />
         <Tooltip
-          formatter={(v, _n, p) => [`${v} walks · ${p.payload.distance} km`, p.payload.name]}
+          formatter={(v, _n, p) => [`${v} walks · ${p.payload.distance} mi`, p.payload.name]}
           cursor={{ fill: "rgba(47,125,79,0.08)" }}
         />
         <Bar dataKey="walks" radius={[6, 6, 0, 0]}>
