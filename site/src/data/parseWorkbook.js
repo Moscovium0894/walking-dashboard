@@ -13,7 +13,7 @@
 // -----------------------------------------------------------------------------
 
 import * as XLSX from "xlsx";
-import { lookupFootwear, lookupPlace, placeKey, weatherFromNotes } from "./labels.js";
+import { lookupFootwear, normFootwearCode, lookupPlace, placeKey, weatherFromNotes } from "./labels.js";
 
 const YEAR_RE = /^(20\d{2})$/;
 
@@ -119,10 +119,14 @@ function buildWalk(row, cols, year) {
   const startPlaceRaw = text(row[cols.startPlace]);
   const description = text(row[cols.description]);
   const notes = text(row[cols.notes]);
-  const code1 = text(row[cols.code1]);
-  const code2 = text(row[cols.code2]);
+  const code1 = text(row[cols.code1]);   // E = Granny's shoes
+  const code2 = text(row[cols.code2]);   // F = Grandad's shoes
 
-  const foot = lookupFootwear(code1);
+  const gCode = normFootwearCode(code1);
+  const gaCode = normFootwearCode(code2);
+  const foot = lookupFootwear(code1);            // Granny (the star)
+  const grandad = gaCode ? lookupFootwear(code2) : null;
+  const together = !!gaCode;
   const place = lookupPlace(startPlaceRaw);
   const weather = weatherFromNotes(notes);
   const { hour, minute } = parseClock(row[cols.startTime]);
@@ -145,9 +149,19 @@ function buildWalk(row, cols, year) {
     steps: Math.round(distance * 2050),   // estimate (no step column in the sheet)
     code1: code1 || undefined,
     code2: code2 || undefined,
+    // Granny is the star: `shoe*` = her footwear.
     shoe: foot.label,
     shoe_color: foot.color,
     shoe_emoji: foot.emoji,
+    granny_code: gCode || undefined,
+    granny_shoe: foot.label,
+    granny_emoji: foot.emoji,
+    // Grandad is a supporting detail (present on ~most walks).
+    grandad_code: gaCode || undefined,
+    grandad_shoe: grandad ? grandad.label : undefined,
+    grandad_emoji: grandad ? grandad.emoji : undefined,
+    together,
+    footwear_match: together ? gCode === gaCode : null,
     weather: weather.name,
     weather_emoji: weather.emoji,
     description: description || undefined,

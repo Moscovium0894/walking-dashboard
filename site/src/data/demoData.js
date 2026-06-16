@@ -12,7 +12,7 @@
 // Deterministic (seeded PRNG) so the numbers are stable across loads.
 // -----------------------------------------------------------------------------
 
-import { lookupFootwear, PLACES } from "./labels.js";
+import { lookupFootwear, normFootwearCode, PLACES } from "./labels.js";
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -45,6 +45,7 @@ const ROUTES = [
 ];
 
 // Footwear codes with the same distribution flavour as the real sheet (n dominant).
+// Same legend used for Granny (col E) and Grandad (col F). "o" folds into "n".
 const FOOT_CODES = [
   { code: "n", weight: 172 },
   { code: "b", weight: 9 },
@@ -121,6 +122,13 @@ export function generateWalks() {
 
     const foot = weightedPick(rng, FOOT_CODES);
     const meta = lookupFootwear(foot.code);
+    // Grandad joins ~97% of walks; usually same footwear, sometimes different.
+    const together = rng() < 0.97;
+    let grandadCode;
+    if (together) {
+      grandadCode = rng() < 0.78 ? foot.code : weightedPick(rng, FOOT_CODES).code;
+    }
+    const grandadMeta = together ? lookupFootwear(grandadCode) : null;
     const place = PLACES[route.name.toLowerCase()] || null;
 
     const season = seasonOf(month);
@@ -144,10 +152,18 @@ export function generateWalks() {
       minute: startMin,
       steps: Math.round(distance * 2050),
       code1: foot.code,
-      code2: rng() < 0.97 ? "s" : "b",
+      code2: grandadCode,
       shoe: meta.label,
       shoe_color: meta.color,
       shoe_emoji: meta.emoji,
+      granny_code: normFootwearCode(foot.code),
+      granny_shoe: meta.label,
+      granny_emoji: meta.emoji,
+      grandad_code: grandadMeta ? normFootwearCode(grandadCode) : undefined,
+      grandad_shoe: grandadMeta ? grandadMeta.label : undefined,
+      grandad_emoji: grandadMeta ? grandadMeta.emoji : undefined,
+      together,
+      footwear_match: together ? normFootwearCode(foot.code) === normFootwearCode(grandadCode) : null,
       weather: undefined,        // intentionally derived from notes downstream
       notes: note,
       description: `${route.name} loop`,

@@ -2,8 +2,8 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
 
-// Which days of the week Granny walks most.
-export default function DowChart({ data, favourite }) {
+// Which days of the week Granny walks most. `distance` already in display unit.
+export default function DowChart({ data, favourite, unit = "mi" }) {
   return (
     <ResponsiveContainer width="100%" height={240}>
       <BarChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
@@ -11,7 +11,7 @@ export default function DowChart({ data, favourite }) {
         <XAxis dataKey="short" tick={{ fontSize: 13, fill: "#6b6256" }} />
         <YAxis tick={{ fontSize: 12, fill: "#6b6256" }} width={40} allowDecimals={false} />
         <Tooltip
-          formatter={(v, _n, p) => [`${v} walks · ${p.payload.distance} mi`, p.payload.name]}
+          formatter={(v, _n, p) => [`${v} walks · ${p.payload.distance} ${unit}`, p.payload.name]}
           cursor={{ fill: "rgba(47,125,79,0.08)" }}
         />
         <Bar dataKey="walks" radius={[6, 6, 0, 0]}>

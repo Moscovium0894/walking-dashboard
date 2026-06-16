@@ -109,16 +109,28 @@ export function computeStats(walks) {
   }
   const weather = Object.values(weatherMap).sort((a, b) => b.value - a.value);
 
-  // Footwear (from code1).
-  const shoeMap = {};
-  for (const w of walks) {
-    const key = w.shoe || lookupFootwear(w.code1).label;
-    const s = (shoeMap[key] = shoeMap[key] || { name: key, color: w.shoe_color || "#2f7d4f", emoji: w.shoe_emoji || "👟", walks: 0, distance: 0 });
-    s.walks++;
-    s.distance += w.distance;
-  }
-  const shoes = Object.values(shoeMap).map((s) => ({ ...s, distance: round(s.distance) })).sort((a, b) => b.distance - a.distance);
-  const favouriteShoe = shoes[0];
+  // Footwear — per person. Granny (col E) is the star; Grandad (col F) supports.
+  const grannyShoes = footwearAgg(walks, "granny_code");
+  const grandadShoes = footwearAgg(walks.filter((w) => w.grandad_code), "grandad_code");
+  const favouriteShoe = grannyShoes[0];
+  const grannyKinds = kindSplit(walks, "granny_code");
+
+  const togetherCount = walks.filter((w) => w.together).length;
+  const soloCount = count - togetherCount;
+  const matchCount = walks.filter((w) => w.footwear_match === true).length;
+  const diffWalks = walks
+    .filter((w) => w.footwear_match === false)
+    .sort((a, b) => b.walk_date.localeCompare(a.walk_date))
+    .map((w) => ({ walk_date: w.walk_date, place: w.place || w.name, distance: w.distance,
+      granny_shoe: w.granny_shoe, granny_emoji: w.granny_emoji,
+      grandad_shoe: w.grandad_shoe, grandad_emoji: w.grandad_emoji }));
+  const footwear = {
+    granny: grannyShoes, grandad: grandadShoes, favourite: favouriteShoe,
+    grannyKinds, togetherCount, soloCount, matchCount,
+    diffCount: diffWalks.length, diffWalks,
+  };
+  // back-compat for any component still reading these
+  const shoes = grannyShoes;
 
   // Locations (by place).
   const locMap = {};
@@ -142,9 +154,9 @@ export function computeStats(walks) {
   const metrics = [
     {
       id: "distance", emoji: "📏", label: "Total distance", accent: "#2f7d4f",
-      exact: totalDistance, unit: " mi", decimals: 1, roundTo: 100,
+      exact: totalDistance, unit: " mi", decimals: 1, roundTo: 100, isDistance: true,
       explain: `Every mile Granny has walked and logged since ${years[0]} — that's about ${Math.round(mi2km(totalDistance)).toLocaleString()} km.`,
-      yearly: yb("distance"), yearlyLabel: "Miles per year",
+      yearly: yb("distance"), yearlyLabel: "Distance per year",
     },
     {
       id: "walks", emoji: "🚶‍♀️", label: "Total walks", accent: "#4d8fd6",
@@ -172,9 +184,9 @@ export function computeStats(walks) {
     },
     {
       id: "longest", emoji: "🏅", label: "Longest walk", accent: "#f4a72c",
-      exact: longest.distance, unit: " mi", decimals: 1, roundTo: 1,
+      exact: longest.distance, unit: " mi", decimals: 1, roundTo: 1, isDistance: true,
       explain: `Her single longest walk: ${round(longest.distance, 1)} miles from ${longest.name} on ${prettyDate(longest.walk_date)}.`,
-      yearly: yb("longest"), yearlyLabel: "Longest walk each year (mi)",
+      yearly: yb("longest"), yearlyLabel: "Longest walk each year",
     },
     {
       id: "pace", emoji: "🐢", label: "Average pace", accent: "#5aa06f",
@@ -184,11 +196,24 @@ export function computeStats(walks) {
     },
     {
       id: "thisYear", emoji: "📅", label: `${thisYearKey} so far`, accent: "#0ea5e9",
-      exact: round(sum(thisYear, (w) => w.distance)), unit: " mi", decimals: 1, roundTo: 10,
+      exact: round(sum(thisYear, (w) => w.distance)), unit: " mi", decimals: 1, roundTo: 10, isDistance: true,
       explain: `Miles walked in ${thisYearKey} so far, across ${thisYear.length} walks.`,
-      yearly: yb("distance"), yearlyLabel: "Miles per year",
+      yearly: yb("distance"), yearlyLabel: "Distance per year",
     },
   ];
+
+  // Calendar: date → summary (for the heat-map / day tap).
+  const byDate = {};
+  for (const w of walks) {
+    const b = (byDate[w.walk_date] = byDate[w.walk_date] || { date: w.walk_date, walks: 0, distance: 0, items: [] });
+    b.walks++; b.distance = round(b.distance + w.distance, 1); b.items.push(w);
+  }
+
+  // "On this day" across the years (same month + day as the latest walk).
+  const md = lastDate.toISOString().slice(5, 10);
+  const onThisDay = walks
+    .filter((w) => w.walk_date.slice(5) === md && w.walk_date !== dates[dates.length - 1])
+    .sort((a, b) => b.walk_date.localeCompare(a.walk_date));
 
   return {
     today: lastDate.toISOString().slice(0, 10),
@@ -220,10 +245,34 @@ export function computeStats(walks) {
     bestStreak: best,
 
     yearSeries, bestYear, monthSeries, dow, favouriteDay, tod, weather,
-    shoes, favouriteShoe, locations, favouritePlace, recent,
+    shoes, favouriteShoe, footwear, locations, favouritePlace, recent,
+    byDate, onThisDay, allWalks: walks,
     metrics,
     funFacts: funFacts({ totalDistance, totalSteps, totalDuration }),
   };
+}
+
+// --- footwear helpers -------------------------------------------------------
+function footwearAgg(walks, codeField) {
+  const map = {};
+  for (const w of walks) {
+    const code = w[codeField];
+    if (!code) continue;
+    const meta = lookupFootwear(code);
+    const s = (map[meta.label] = map[meta.label] || { name: meta.label, color: meta.color, emoji: meta.emoji, kind: meta.kind, walks: 0, distance: 0 });
+    s.walks++; s.distance += w.distance;
+  }
+  return Object.values(map).map((s) => ({ ...s, distance: round(s.distance) })).sort((a, b) => b.distance - a.distance);
+}
+
+function kindSplit(walks, codeField) {
+  const KINDS = { boots: { name: "Boots", emoji: "🥾", value: 0 }, shoes: { name: "Shoes", emoji: "👟", value: 0 }, sandals: { name: "Sandals", emoji: "🩴", value: 0 }, flipflops: { name: "Flip-flops", emoji: "🩴", value: 0 } };
+  for (const w of walks) {
+    if (!w[codeField]) continue;
+    const meta = lookupFootwear(w[codeField]);
+    if (KINDS[meta.kind]) KINDS[meta.kind].value++;
+  }
+  return Object.values(KINDS).filter((k) => k.value > 0);
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -265,4 +314,67 @@ function funFacts({ totalDistance, totalSteps, totalDuration }) {
     { emoji: "⏱️", headline: `${Math.round(totalDuration / 60).toLocaleString()} hrs`, text: `spent walking — about ${(totalDuration / 60 / 24).toFixed(0)} full days on the move.` },
     { emoji: "🚀", headline: `${((totalDistance / MOON) * 100).toFixed(2)}%`, text: `of the way to the Moon — every single step counts!` },
   ];
+}
+
+// ============================================================================
+// EXPLORER — build-your-own chart. Pick a metric + grouping → a time series.
+// Distance metrics are returned in MILES (canonical); the UI converts to km.
+// ============================================================================
+export const EXPLORER_METRICS = [
+  { id: "distance",    label: "Distance",        agg: "sum",   field: (w) => w.distance,          isDistance: true },
+  { id: "walks",       label: "Number of walks", agg: "count" },
+  { id: "time",        label: "Time (hours)",    agg: "sum",   field: (w) => (w.duration_min || 0) / 60 },
+  { id: "steps",       label: "Steps (est.)",    agg: "sum",   field: (w) => w.steps || 0 },
+  { id: "avgDistance", label: "Avg walk length", agg: "avg",   field: (w) => w.distance,          isDistance: true },
+  { id: "pace",        label: "Average pace",    agg: "avgw",  field: (w) => w.duration_min, weight: (w) => w.distance, need: (w) => w.duration_min && w.distance, isPace: true },
+];
+
+export const EXPLORER_GROUPINGS = [
+  { id: "week",  label: "By week" },
+  { id: "month", label: "By month" },
+  { id: "year",  label: "By year" },
+];
+
+function groupKey(iso, grouping) {
+  if (grouping === "year") return iso.slice(0, 4);
+  if (grouping === "month") return iso.slice(0, 7);
+  // ISO week (Mon-based), key "YYYY-Www"
+  const d = new Date(iso + "T12:00:00");
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);
+  const firstThu = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((d - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+export function aggregateSeries(walks, metricId, grouping) {
+  const metric = EXPLORER_METRICS.find((m) => m.id === metricId) || EXPLORER_METRICS[0];
+  const buckets = new Map();
+  for (const w of walks) {
+    if (metric.need && !metric.need(w)) continue;
+    const key = groupKey(w.walk_date, grouping);
+    const b = buckets.get(key) || { key, n: 0, total: 0, wsum: 0, wn: 0 };
+    b.n++;
+    if (metric.agg === "sum" || metric.agg === "avg") b.total += metric.field(w);
+    if (metric.agg === "avgw") { b.total += metric.field(w); b.wsum += metric.weight(w); }
+    buckets.set(key, b);
+  }
+  const rows = [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
+  return rows.map((b) => {
+    let value;
+    if (metric.agg === "count") value = b.n;
+    else if (metric.agg === "sum") value = b.total;
+    else if (metric.agg === "avg") value = b.n ? b.total / b.n : 0;
+    else if (metric.agg === "avgw") value = b.wsum ? b.total / b.wsum : 0;
+    return { label: prettyGroupLabel(b.key, grouping), value: Math.round(value * 10) / 10, count: b.n };
+  });
+}
+
+function prettyGroupLabel(key, grouping) {
+  if (grouping === "year") return key;
+  if (grouping === "month") {
+    const [y, m] = key.split("-");
+    return `${MONTHS[+m - 1]} ${y.slice(2)}`;
+  }
+  return key.replace("-W", " w"); // 2026 w24
 }

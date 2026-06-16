@@ -6,27 +6,31 @@
 // from here, so a one-line change here relabels the whole dashboard.
 // -----------------------------------------------------------------------------
 
-// --- code1 (spreadsheet column E) — most likely FOOTWEAR --------------------
-// Values seen in the real sheet: n(172) b(9) s(7) sa(5) o(2) f(1).
-// Meanings TBC with the owner — labels below are best-guess placeholders.
-// Edit the `label` text once confirmed; the `emoji`/`color` are just for flair.
-export const CODE1_FOOTWEAR = {
-  n:  { label: "Trainers",        emoji: "👟", color: "#2f7d4f" },
-  b:  { label: "Boots",           emoji: "🥾", color: "#b45309" },
-  s:  { label: "Sandals",         emoji: "🩴", color: "#0ea5e9" },
-  sa: { label: "Sandals (other)", emoji: "👡", color: "#9b6bd1" },
-  o:  { label: "Other shoes",     emoji: "👞", color: "#6b7280" },
-  f:  { label: "Wellies",         emoji: "🌧️", color: "#16a34a" },
+// --- Footwear legend (CONFIRMED by the owner) -------------------------------
+// Column E = GRANNY's shoes, Column F = GRANDAD's shoes. Same letter legend for
+// both. This is the single editable lookup — change a label here and it updates
+// everywhere (per-person stats, the comparison side-stat, search, etc.).
+//   b = boots · sa = sandals · f = flip-flops · n = new shoes · s = old shoes
+//   o = a data-entry slip → treated as "n" (new shoes)
+export const FOOTWEAR = {
+  b:  { label: "Boots",       emoji: "🥾", color: "#b45309", kind: "boots" },
+  sa: { label: "Sandals",     emoji: "🩴", color: "#0ea5e9", kind: "sandals" },
+  f:  { label: "Flip-flops",  emoji: "🩴", color: "#e0a800", kind: "flipflops" },
+  n:  { label: "New shoes",   emoji: "👟", color: "#2f7d4f", kind: "shoes" },
+  s:  { label: "Old shoes",   emoji: "👞", color: "#5aa06f", kind: "shoes" },
 };
-export const CODE1_FALLBACK = { label: "Other", emoji: "👣", color: "#9aa0a6" };
+export const FOOTWEAR_FALLBACK = { label: "Not noted", emoji: "👣", color: "#9aa0a6", kind: "unknown" };
 
-// --- code2 (spreadsheet column F) — meaning TBC -----------------------------
-// Values seen: s(190) b(5). Placeholder labels until the owner confirms.
-export const CODE2 = {
-  s: { label: "Type S", emoji: "🅢" },
-  b: { label: "Type B", emoji: "🅑" },
-};
-export const CODE2_FALLBACK = { label: "Unknown", emoji: "•" };
+// Normalise a raw code: lower-case, and fold the "o" data-entry mistake into "n".
+export function normFootwearCode(code) {
+  const k = String(code || "").trim().toLowerCase();
+  return k === "o" ? "n" : k;
+}
+
+export function lookupFootwear(code) {
+  const k = normFootwearCode(code);
+  return FOOTWEAR[k] || FOOTWEAR_FALLBACK;
+}
 
 // --- Places → map coordinates (Arnside / Silverdale / Morecambe Bay area) ----
 // Informal names from the "Start Place" column. Coordinates are approximate and
@@ -62,11 +66,6 @@ export function placeKey(raw) {
 export function lookupPlace(raw) {
   const k = placeKey(raw);
   return PLACES[k] || null;
-}
-
-export function lookupFootwear(code) {
-  const k = String(code || "").trim().toLowerCase();
-  return CODE1_FOOTWEAR[k] || CODE1_FALLBACK;
 }
 
 // --- Weather keywords (scanned from the free-text Notes column) --------------

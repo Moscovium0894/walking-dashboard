@@ -4,7 +4,7 @@ import "leaflet/dist/leaflet.css";
 // A little map of Granny's regular spots. Each circle is a place she walks;
 // bigger circle = more visits. CircleMarkers avoid the broken-marker-icon
 // problem you get bundling Leaflet's default pin images.
-export default function LocationsMap({ locations }) {
+export default function LocationsMap({ locations, u }) {
   const pts = locations.filter((l) => Number.isFinite(l.lat));
   if (!pts.length) return <p className="muted">No mapped places yet.</p>;
 
@@ -31,7 +31,7 @@ export default function LocationsMap({ locations }) {
             <Tooltip direction="top">
               <strong>{l.name}</strong>
               <br />
-              {l.walks} walks · {l.distance} mi
+              {l.walks} walks · {u ? u.fmtDist(l.distance) : `${l.distance} mi`}
             </Tooltip>
           </CircleMarker>
         ))}
