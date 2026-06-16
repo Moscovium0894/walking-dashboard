@@ -1,25 +1,28 @@
 import { useEffect, useState } from "react";
-import { supabase } from "./lib/supabase.js";
-import Login from "./components/Login.jsx";
+import { loadWalks, USING_DEMO_DATA } from "./data/source.js";
+import { computeStats } from "./data/stats.js";
 import Dashboard from "./components/Dashboard.jsx";
 
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-    });
-    return () => sub.subscription.unsubscribe();
+    loadWalks()
+      .then((walks) => setStats(computeStats(walks)))
+      .catch((e) => setError(e.message));
   }, []);
 
-  if (loading) {
-    return <div className="centered muted">Loading…</div>;
+  if (error) {
+    return <div className="centered muted">Couldn’t load walks: {error}</div>;
   }
-  return session ? <Dashboard session={session} /> : <Login />;
+  if (!stats) {
+    return (
+      <div className="centered loading">
+        <div className="boot">🥾</div>
+        <p>Lacing up…</p>
+      </div>
+    );
+  }
+  return <Dashboard stats={stats} demo={USING_DEMO_DATA} />;
 }

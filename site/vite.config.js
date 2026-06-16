@@ -1,8 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// base must match the GitHub Pages sub-path: https://<user>.github.io/walking-dashboard/
-export default defineConfig({
+// In production (GitHub Pages) the site lives at a sub-path:
+//   https://<user>.github.io/walking-dashboard/
+// In local dev we serve from the root so it's simpler to preview.
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  base: "/walking-dashboard/",
-});
+  base: command === "build" ? "/walking-dashboard/" : "/",
+}));

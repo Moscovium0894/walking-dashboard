@@ -1,29 +1,47 @@
 # Granny Walking
 
-A private dashboard of Granny's walks, recorded since 2009. Replaces a manual,
-five-app workflow (Garmin → BaseCamp → GPX → Memory Maps → spreadsheet) with a
-mostly-automated pipeline and a web dashboard.
+A friendly web dashboard of Granny's walks, recorded since 2009 — every walk on a
+map, with distances, trends, footwear stats and fun milestones.
 
-## What it does
+**Live:** https://moscovium0894.github.io/walking-dashboard/
 
-1. Granny finishes a walk; her Garmin Forerunner syncs to Garmin Connect automatically.
-2. A scheduled job downloads new activities, converts them, computes distance, and
-   flags any "in a car / not logging" segments.
-3. Walks are stored in Supabase (database + GPX file storage).
-4. A private, login-protected web dashboard shows every walk on a map with stats,
-   and lets Granny confirm/discard flagged segments in a couple of taps.
+## How it works (current design)
+
+Granny keeps her walks in a **spreadsheet she maintains herself**. The dashboard is
+a static site that reads that data through one swappable data layer
+(`site/src/data/source.js`):
+
+- **Today:** rich, realistic **demo data** so the site looks alive before the real
+  sheet lands (`site/src/data/demoData.js`).
+- **Next:** her published/exported spreadsheet as CSV — a one-file change in
+  `source.js`. No database, no login.
+
+> The earlier design used Supabase (database + login) and an automated Garmin
+> pipeline. That full implementation is preserved on the **`supabase-version`**
+> branch in case server-side accounts are wanted later. See `docs/PLAN.md`.
 
 ## Repository layout
 
 | Folder | Purpose |
 |--------|---------|
+| `site/` | Static web dashboard (React + Vite, deployed to GitHub Pages). |
+| `site/src/data/` | The swappable data layer (demo data now → spreadsheet next). |
 | `docs/` | Planning and architecture (`PLAN.md`). |
-| `pipeline/` | Python: Garmin download → FIT→GPX → stats → Supabase. Runs in GitHub Actions. |
-| `site/` | Static web dashboard (GitHub Pages / Netlify). Reads from Supabase. |
-| `data/seed/` | The historical spreadsheet and import scripts (walks since 2009). |
-| `data/gpx/` | Sample / exported GPX (full data lives in Supabase Storage). |
-| `.github/workflows/` | Scheduled GitHub Action that runs the pipeline. |
+| `data/seed/` | Where the historical spreadsheet + import scripts will live. |
+| `pipeline/` | (parked) Python Garmin→GPX pipeline — only if auto-import is wanted. |
+| `supabase/` | (parked) DB schema for the optional Supabase design. |
+| `.github/workflows/` | `deploy.yml` builds `site/` and publishes to GitHub Pages. |
+
+## Develop
+
+```bash
+cd site
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # production build → site/dist
+```
 
 ## Status
 
-Planning. See `docs/PLAN.md`.
+Live demo dashboard with sample data. Next: wire in Granny's real spreadsheet.
+See `docs/PLAN.md`.

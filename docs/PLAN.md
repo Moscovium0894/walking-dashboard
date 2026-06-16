@@ -2,6 +2,22 @@
 
 _Last updated: 2026-06-16_
 
+> ## ⚠️ Architecture update (2026-06-16) — spreadsheet-driven, Supabase parked
+>
+> Granny is happy to keep entering her walks into a **spreadsheet herself**. That
+> removes the need for a database *and* a login, so the live dashboard now reads
+> walk data through a single swappable data layer (`site/src/data/source.js`):
+> demo data today → her published/exported spreadsheet (CSV) next.
+>
+> - **No login, no Supabase** in the live site. The full Supabase implementation
+>   (DB schema, RLS, auth UI) is preserved on the **`supabase-version`** branch and
+>   can be restored if we ever want server-side accounts again. Nothing was lost.
+> - **Garmin auto-import pipeline:** _open question_ — if Granny enters walks by
+>   hand, the automated Garmin→GPX pipeline may be unnecessary. Flagged, not yet
+>   decided. The plan below still describes the original full design for reference.
+>
+> The sections below are the **original** plan and are kept for context.
+
 ## Goal
 
 A private web dashboard showing every walk Granny has recorded since 2009 — on a
