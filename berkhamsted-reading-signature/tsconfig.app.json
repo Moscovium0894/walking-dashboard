@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "types": [],
+    "outDir": "./node_modules/.tmp/types/app",
+    "tsBuildInfoFile": "./node_modules/.tmp/app.tsbuildinfo"
+  },
+  "include": ["src/admin/**/*.ts", "src/admin/**/*.tsx", "src/shared/**/*.ts"]
+}
