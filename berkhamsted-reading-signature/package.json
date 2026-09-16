@@ -1,0 +1,37 @@
+{
+  "name": "berkhamsted-reading-signature",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private admin site that maintains a current book and serves a stable, JavaScript-free email signature.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --force",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "wrangler d1 migrations apply berkhamsted-reading-signature --local",
+    "db:migrate:remote": "wrangler d1 migrations apply berkhamsted-reading-signature --remote",
+    "deploy": "npm run build && wrangler deploy",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "preact": "^10.27.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "@eslint/js": "^9.36.0",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.44.0",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.40.0"
+  }
+}
