@@ -238,147 +238,6 @@ async function fetchCover(url) {
   }
 }
 
-// src/worker/env.ts
-var DEFAULT_SLUG = "otto";
-function readConfig(env) {
-  const adminUsername = (env.ADMIN_USERNAME ?? "").trim();
-  const adminPassword = env.ADMIN_PASSWORD ?? "";
-  const sessionSecret = env.SESSION_SECRET ?? "";
-  const slugCandidate = (env.SIGNATURE_SLUG ?? "").trim().toLowerCase();
-  const slug = /^[a-z0-9-]{1,40}$/.test(slugCandidate) ? slugCandidate : DEFAULT_SLUG;
-  return {
-    slug,
-    adminUsername,
-    adminPassword,
-    sessionSecret,
-    configured: adminUsername !== "" && adminPassword !== "" && sessionSecret !== ""
-  };
-}
-
-// src/worker/auth.ts
-var SESSION_COOKIE = "__Host-brs_session";
-var SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-var PBKDF2_ITERATIONS = 1e5;
-var encoder = new TextEncoder();
-function toBase64Url(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function randomToken(byteLength = 32) {
-  const bytes = new Uint8Array(byteLength);
-  crypto.getRandomValues(bytes);
-  return toBase64Url(bytes);
-}
-async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-async function constantTimeEquals(a, b) {
-  const [digestA, digestB] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(a)),
-    crypto.subtle.digest("SHA-256", encoder.encode(b))
-  ]);
-  const bytesA = new Uint8Array(digestA);
-  const bytesB = new Uint8Array(digestB);
-  let difference = 0;
-  for (let i = 0; i < bytesA.length; i += 1) {
-    difference |= (bytesA[i] ?? 0) ^ (bytesB[i] ?? 0);
-  }
-  return difference === 0;
-}
-async function derivePassword(password, salt) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, [
-    "deriveBits"
-  ]);
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: encoder.encode(salt),
-      iterations: PBKDF2_ITERATIONS,
-      hash: "SHA-256"
-    },
-    key,
-    256
-  );
-  return toBase64Url(new Uint8Array(bits));
-}
-async function verifyCredentials(env, username, password) {
-  const config = readConfig(env);
-  if (!config.configured) return false;
-  const [suppliedDigest, expectedDigest, usernameMatches] = await Promise.all([
-    derivePassword(password, config.sessionSecret),
-    derivePassword(config.adminPassword, config.sessionSecret),
-    constantTimeEquals(username, config.adminUsername)
-  ]);
-  const passwordMatches = await constantTimeEquals(suppliedDigest, expectedDigest);
-  return usernameMatches && passwordMatches;
-}
-async function createSession(env) {
-  const token = randomToken();
-  const csrfToken = randomToken();
-  const now = Math.floor(Date.now() / 1e3);
-  await env.DB.prepare(
-    "INSERT INTO sessions (id, csrf_hash, created_at, expires_at) VALUES (?, ?, ?, ?)"
-  ).bind(
-    await sha256Hex(token),
-    await sha256Hex(csrfToken),
-    (/* @__PURE__ */ new Date()).toISOString(),
-    now + SESSION_TTL_SECONDS
-  ).run();
-  await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now).run();
-  return { id: token, csrfToken };
-}
-function readCookie(request, name) {
-  const header = request.headers.get("Cookie");
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator === -1) continue;
-    if (part.slice(0, separator).trim() === name) {
-      return part.slice(separator + 1).trim();
-    }
-  }
-  return null;
-}
-async function getSession(env, request) {
-  const token = readCookie(request, SESSION_COOKIE);
-  if (!token) return null;
-  const row = await env.DB.prepare("SELECT csrf_hash, expires_at FROM sessions WHERE id = ?").bind(await sha256Hex(token)).first();
-  if (!row) return null;
-  if (row.expires_at < Math.floor(Date.now() / 1e3)) {
-    await destroySession(env, token);
-    return null;
-  }
-  return { token, csrfHash: row.csrf_hash };
-}
-async function destroySession(env, token) {
-  await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(await sha256Hex(token)).run();
-}
-var CSRF_COOKIE = "__Host-brs_csrf";
-async function verifyCsrf(request, session, submittedToken) {
-  const origin = request.headers.get("Origin");
-  if (origin !== null) {
-    const expected = new URL(request.url).origin;
-    if (origin !== expected) return false;
-  }
-  if (!submittedToken) return false;
-  return constantTimeEquals(await sha256Hex(submittedToken), session.csrfHash);
-}
-function sessionCookieHeaders(session) {
-  const attributes = `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`;
-  return [
-    `${SESSION_COOKIE}=${session.id}; ${attributes}`,
-    // Readable by the page so forms can embed it; its value is useless without
-    // the HttpOnly session cookie that it is bound to.
-    `${CSRF_COOKIE}=${session.csrfToken}; Path=/; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`
-  ];
-}
-function clearedCookieHeaders() {
-  const expired = "Path=/; Secure; Max-Age=0";
-  return [`${SESSION_COOKIE}=; HttpOnly; ${expired}`, `${CSRF_COOKIE}=; ${expired}`];
-}
-
 // src/shared/schoolYear.ts
 var ENGLAND_SCHOOL_YEAR_CONFIG = {
   cutoffMonth: 9,
@@ -446,19 +305,73 @@ function calculateSchoolYear(dateOfBirth, asOf = /* @__PURE__ */ new Date(), con
 }
 
 // src/worker/db.ts
-var VALID_SOURCES = ["google-books", "open-library", "manual"];
-function toBookSource(value) {
-  return VALID_SOURCES.includes(value) ? value : "manual";
+function toUser(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    slug: row.slug,
+    revision: row.revision,
+    imageRevision: row.image_revision,
+    imageWidth: row.image_width,
+    imageHeight: row.image_height
+  };
 }
-async function getProfile(env) {
+var USER_COLUMNS = "id, username, slug, revision, image_revision, image_width, image_height";
+async function getUserById(env, userId) {
+  const row = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).bind(userId).first();
+  return row ? toUser(row) : null;
+}
+async function getUserBySlug(env, slug) {
+  const row = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE slug = ?`).bind(slug).first();
+  return row ? toUser(row) : null;
+}
+async function getCredentialsByUsername(env, username) {
+  const row = await env.DB.prepare(
+    "SELECT id, password_hash, password_salt FROM users WHERE username_lower = ?"
+  ).bind(username.trim().toLowerCase()).first();
+  return row ? { id: row.id, passwordHash: row.password_hash, passwordSalt: row.password_salt } : null;
+}
+async function slugTaken(env, slug) {
+  const row = await env.DB.prepare("SELECT 1 AS hit FROM users WHERE slug = ?").bind(slug).first();
+  return row !== null;
+}
+async function usernameTaken(env, username) {
+  const row = await env.DB.prepare("SELECT 1 AS hit FROM users WHERE username_lower = ?").bind(username.trim().toLowerCase()).first();
+  return row !== null;
+}
+async function createUser(env, user) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const result = await env.DB.prepare(
+      `INSERT INTO users (username, username_lower, slug, password_hash, password_salt, revision, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`
+    ).bind(
+      user.username,
+      user.username.toLowerCase(),
+      user.slug,
+      user.passwordHash,
+      user.passwordSalt,
+      now
+    ).run();
+    const userId = Number(result.meta.last_row_id);
+    if (!Number.isFinite(userId) || userId <= 0) return null;
+    await env.DB.prepare(
+      `INSERT INTO profiles (user_id, name, date_of_birth, house, school, subtitle,
+                             show_house, show_year, show_school, show_subtitle, updated_at)
+       VALUES (?, ?, ?, '', '', '', 1, 1, 1, 0, ?)`
+    ).bind(userId, user.name, user.dateOfBirth, now).run();
+    return userId;
+  } catch {
+    return null;
+  }
+}
+async function getProfile(env, userId) {
   const row = await env.DB.prepare(
     `SELECT name, date_of_birth, house, school, subtitle,
             show_house, show_year, show_school, show_subtitle, updated_at
-     FROM profile WHERE id = 1`
-  ).first();
-  if (!row) {
-    throw new Error("Profile row is missing. Has the database migration been applied?");
-  }
+     FROM profiles WHERE user_id = ?`
+  ).bind(userId).first();
+  if (!row) return null;
   return {
     name: row.name,
     dateOfBirth: row.date_of_birth,
@@ -472,12 +385,12 @@ async function getProfile(env) {
     updatedAt: row.updated_at
   };
 }
-async function updateProfile(env, profile) {
+async function updateProfile(env, userId, profile) {
   await env.DB.prepare(
-    `UPDATE profile
+    `UPDATE profiles
      SET name = ?, date_of_birth = ?, house = ?, school = ?, subtitle = ?,
          show_house = ?, show_year = ?, show_school = ?, show_subtitle = ?, updated_at = ?
-     WHERE id = 1`
+     WHERE user_id = ?`
   ).bind(
     profile.name,
     profile.dateOfBirth,
@@ -488,15 +401,20 @@ async function updateProfile(env, profile) {
     profile.showYear ? 1 : 0,
     profile.showSchool ? 1 : 0,
     profile.showSubtitle ? 1 : 0,
-    (/* @__PURE__ */ new Date()).toISOString()
+    (/* @__PURE__ */ new Date()).toISOString(),
+    userId
   ).run();
-  await bumpRevision(env);
+  await bumpRevision(env, userId);
 }
-async function getCurrentBook(env) {
+var VALID_SOURCES = ["google-books", "open-library", "manual"];
+function toBookSource(value) {
+  return VALID_SOURCES.includes(value) ? value : "manual";
+}
+async function getCurrentBook(env, userId) {
   const row = await env.DB.prepare(
     `SELECT title, author, cover_url, isbn, publication_year, source, updated_at
-     FROM current_book WHERE id = 1`
-  ).first();
+     FROM books WHERE user_id = ?`
+  ).bind(userId).first();
   if (!row) return null;
   return {
     title: row.title,
@@ -508,11 +426,11 @@ async function getCurrentBook(env) {
     updatedAt: row.updated_at
   };
 }
-async function setCurrentBook(env, book) {
+async function setCurrentBook(env, userId, book) {
   await env.DB.prepare(
-    `INSERT INTO current_book (id, title, author, cover_url, isbn, publication_year, source, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
+    `INSERT INTO books (user_id, title, author, cover_url, isbn, publication_year, source, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
        title = excluded.title,
        author = excluded.author,
        cover_url = excluded.cover_url,
@@ -521,6 +439,7 @@ async function setCurrentBook(env, book) {
        source = excluded.source,
        updated_at = excluded.updated_at`
   ).bind(
+    userId,
     book.title,
     book.author,
     book.coverUrl,
@@ -529,18 +448,7 @@ async function setCurrentBook(env, book) {
     book.source,
     (/* @__PURE__ */ new Date()).toISOString()
   ).run();
-  await bumpRevision(env);
-}
-async function putImage(env, key, contentType, bytes, etag) {
-  await env.DB.prepare(
-    `INSERT INTO images (key, content_type, bytes, etag, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET
-       content_type = excluded.content_type,
-       bytes = excluded.bytes,
-       etag = excluded.etag,
-       updated_at = excluded.updated_at`
-  ).bind(key, contentType, bytes, etag, (/* @__PURE__ */ new Date()).toISOString()).run();
+  await bumpRevision(env, userId);
 }
 function toArrayBuffer(value) {
   if (value instanceof ArrayBuffer) return value;
@@ -550,66 +458,49 @@ function toArrayBuffer(value) {
   if (Array.isArray(value)) return Uint8Array.from(value).buffer;
   return null;
 }
-async function getImage(env, key) {
+async function putImage(env, userId, key, contentType, bytes, etag) {
+  await env.DB.prepare(
+    `INSERT INTO user_images (user_id, key, content_type, bytes, etag, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET
+       content_type = excluded.content_type,
+       bytes = excluded.bytes,
+       etag = excluded.etag,
+       updated_at = excluded.updated_at`
+  ).bind(userId, key, contentType, bytes, etag, (/* @__PURE__ */ new Date()).toISOString()).run();
+}
+async function getImage(env, userId, key) {
   const row = await env.DB.prepare(
-    "SELECT content_type, bytes, etag FROM images WHERE key = ?"
-  ).bind(key).first();
+    "SELECT content_type, bytes, etag FROM user_images WHERE user_id = ? AND key = ?"
+  ).bind(userId, key).first();
   if (!row) return null;
   const bytes = toArrayBuffer(row.bytes);
   if (bytes === null || bytes.byteLength === 0) return null;
   return { contentType: row.content_type, bytes, etag: row.etag };
 }
-async function deleteImage(env, key) {
-  await env.DB.prepare("DELETE FROM images WHERE key = ?").bind(key).run();
+async function deleteImage(env, userId, key) {
+  await env.DB.prepare("DELETE FROM user_images WHERE user_id = ? AND key = ?").bind(userId, key).run();
 }
-async function hasImage(env, key) {
-  const row = await env.DB.prepare("SELECT 1 AS present FROM images WHERE key = ?").bind(key).first();
+async function hasImage(env, userId, key) {
+  const row = await env.DB.prepare(
+    "SELECT 1 AS present FROM user_images WHERE user_id = ? AND key = ?"
+  ).bind(userId, key).first();
   return row !== null;
 }
-async function getSetting(env, key) {
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first();
-  return row?.value ?? null;
+async function bumpRevision(env, userId) {
+  await env.DB.prepare("UPDATE users SET revision = revision + 1 WHERE id = ?").bind(userId).run();
 }
-async function setSetting(env, key, value) {
+async function setSignatureImageState(env, userId, revision, width, height) {
   await env.DB.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).bind(key, value).run();
+    "UPDATE users SET image_revision = ?, image_width = ?, image_height = ? WHERE id = ?"
+  ).bind(revision, width, height, userId).run();
 }
-async function getRevision(env) {
-  const value = await getSetting(env, "revision");
-  const parsed = Number.parseInt(value ?? "1", 10);
-  return Number.isFinite(parsed) ? parsed : 1;
-}
-async function bumpRevision(env) {
-  const next = await getRevision(env) + 1;
-  await setSetting(env, "revision", String(next));
-  return next;
-}
-async function getSignatureImageRevision(env) {
-  const value = await getSetting(env, "signature_image_revision");
-  const parsed = Number.parseInt(value ?? "0", 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-async function setSignatureImageRevision(env, revision) {
-  await setSetting(env, "signature_image_revision", String(revision));
-}
-async function getSignatureImageSize(env) {
-  const raw = await getSetting(env, "signature_image_size");
-  if (raw === null) return null;
-  const [width, height] = raw.split("x").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-  return { width, height };
-}
-async function setSignatureImageSize(env, size) {
-  await setSetting(env, "signature_image_size", `${size.width}x${size.height}`);
-}
-async function getSignatureData(env) {
-  const [profile, book, revision] = await Promise.all([
-    getProfile(env),
-    getCurrentBook(env),
-    getRevision(env)
+async function getSignatureData(env, user) {
+  const [profile, book] = await Promise.all([
+    getProfile(env, user.id),
+    getCurrentBook(env, user.id)
   ]);
+  if (profile === null) return null;
   const year = calculateSchoolYear(profile.dateOfBirth);
   return {
     profile,
@@ -620,8 +511,148 @@ async function getSignatureData(env) {
       academicYearLabel: year.academicYearLabel,
       status: year.status
     },
-    revision
+    revision: user.revision
   };
+}
+
+// src/worker/env.ts
+function readConfig(env) {
+  const signupCode = (env.SIGNUP_CODE ?? "").trim();
+  return {
+    pepper: env.PASSWORD_PEPPER ?? "",
+    signupCode,
+    signupRestricted: signupCode !== ""
+  };
+}
+
+// src/worker/auth.ts
+var SESSION_COOKIE = "__Host-brs_session";
+var CSRF_COOKIE = "__Host-brs_csrf";
+var SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+var PBKDF2_ITERATIONS = 1e5;
+var encoder = new TextEncoder();
+function toBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function randomToken(byteLength = 32) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return toBase64Url(bytes);
+}
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function constantTimeEquals(a, b) {
+  const [digestA, digestB] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(a)),
+    crypto.subtle.digest("SHA-256", encoder.encode(b))
+  ]);
+  const bytesA = new Uint8Array(digestA);
+  const bytesB = new Uint8Array(digestB);
+  let difference = 0;
+  for (let i = 0; i < bytesA.length; i += 1) {
+    difference |= (bytesA[i] ?? 0) ^ (bytesB[i] ?? 0);
+  }
+  return difference === 0;
+}
+async function derivePassword(password, salt, pepper) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, [
+    "deriveBits"
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: encoder.encode(`${salt}:${pepper}`),
+      iterations: PBKDF2_ITERATIONS,
+      hash: "SHA-256"
+    },
+    key,
+    256
+  );
+  return toBase64Url(new Uint8Array(bits));
+}
+async function hashPassword(env, password) {
+  const salt = randomToken(16);
+  const hash = await derivePassword(password, salt, readConfig(env).pepper);
+  return { hash, salt };
+}
+async function authenticate(env, username, password) {
+  const config = readConfig(env);
+  const credentials = await getCredentialsByUsername(env, username);
+  const salt = credentials?.passwordSalt ?? "absent-account-placeholder-salt";
+  const expected = credentials?.passwordHash ?? "";
+  const supplied = await derivePassword(password, salt, config.pepper);
+  const matches = expected !== "" && await constantTimeEquals(supplied, expected);
+  return matches && credentials ? credentials.id : null;
+}
+async function createSession(env, userId) {
+  const token = randomToken();
+  const csrfToken = randomToken();
+  const now = Math.floor(Date.now() / 1e3);
+  await env.DB.prepare(
+    "INSERT INTO sessions (id, user_id, csrf_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(
+    await sha256Hex(token),
+    userId,
+    await sha256Hex(csrfToken),
+    (/* @__PURE__ */ new Date()).toISOString(),
+    now + SESSION_TTL_SECONDS
+  ).run();
+  await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now).run();
+  return { token, csrfToken };
+}
+function readCookie(request, name) {
+  const header = request.headers.get("Cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() === name) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return null;
+}
+async function getSession(env, request) {
+  const token = readCookie(request, SESSION_COOKIE);
+  if (!token) return null;
+  const row = await env.DB.prepare(
+    "SELECT user_id, csrf_hash, expires_at FROM sessions WHERE id = ?"
+  ).bind(await sha256Hex(token)).first();
+  if (!row) return null;
+  if (row.expires_at < Math.floor(Date.now() / 1e3)) {
+    await destroySession(env, token);
+    return null;
+  }
+  return { token, csrfHash: row.csrf_hash, userId: row.user_id };
+}
+async function destroySession(env, token) {
+  await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(await sha256Hex(token)).run();
+}
+async function verifyCsrf(request, session, submittedToken) {
+  const origin = request.headers.get("Origin");
+  if (origin !== null) {
+    const expected = new URL(request.url).origin;
+    if (origin !== expected) return false;
+  }
+  if (!submittedToken) return false;
+  return constantTimeEquals(await sha256Hex(submittedToken), session.csrfHash);
+}
+function sessionCookieHeaders(session) {
+  const attributes = `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`;
+  return [
+    `${SESSION_COOKIE}=${session.token}; ${attributes}`,
+    // Readable by the page so forms can embed it. Useless without the HttpOnly
+    // session cookie it is bound to.
+    `${CSRF_COOKIE}=${session.csrfToken}; Path=/; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`
+  ];
+}
+function clearedCookieHeaders() {
+  const expired = "Path=/; Secure; Max-Age=0";
+  return [`${SESSION_COOKIE}=; HttpOnly; ${expired}`, `${CSRF_COOKIE}=; ${expired}`];
 }
 
 // src/worker/assets.generated.ts
@@ -762,9 +793,9 @@ function notFound(message = "Not found") {
 
 // src/worker/signature.ts
 var BRAND = {
-  navy: "#0A2142",
-  gold: "#EFC486",
-  rose: "#C1272D",
+  navy: "#0A2342",
+  gold: "#DCB180",
+  rose: "#CC3845",
   /** Very light neutral for placeholder fills. The page itself is white. */
   wash: "#F6F7F9",
   ink: "#1F2937",
@@ -928,841 +959,6 @@ function renderSignatureText(data) {
     );
   }
   return lines.join("\n");
-}
-
-// src/worker/ui/layout.ts
-var SITE_LOGO = "/assets/berkhamsted-logo.png";
-var SITE_WORDMARK = "/assets/berkhamsted-wordmark.png";
-var NAV_ITEMS = [
-  { key: "dashboard", href: "/admin", label: "Dashboard" },
-  { key: "book", href: "/admin/book", label: "Change book" },
-  { key: "profile", href: "/admin/profile", label: "Profile" },
-  { key: "signature", href: "/admin/signature", label: "Signature" }
-];
-function styles() {
-  return `
-:root {
-  --navy: ${BRAND.navy};
-  --navy-soft: #16305C;
-  --gold: ${BRAND.gold};
-  --rose: ${BRAND.rose};
-  --paper: #FFFFFF;
-  --wash: ${BRAND.wash};
-  --ink: ${BRAND.ink};
-  --muted: ${BRAND.muted};
-  --rule: ${BRAND.rule};
-  --shadow: 0 1px 2px rgba(10, 33, 66, 0.05), 0 8px 24px rgba(10, 33, 66, 0.05);
-}
-
-* { box-sizing: border-box; }
-
-/* A class setting display outranks the user agent's [hidden] rule, so the
-   hidden attribute would silently do nothing on .btn elements. That would
-   leave the copy button visible with JavaScript disabled, and the upload
-   button visible while cropping, so state it explicitly. */
-[hidden] { display: none !important; }
-
-body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-}
-
-h1, h2, h3 { font-family: Georgia, 'Times New Roman', Times, serif; color: var(--navy); margin: 0; font-weight: 700; }
-h1 { font-size: 1.75rem; letter-spacing: -0.01em; }
-h2 { font-size: 1.15rem; }
-h3 { font-size: 0.95rem; }
-p { margin: 0 0 1rem; }
-p:last-child { margin-bottom: 0; }
-a { color: var(--navy); }
-
-/* --- Masthead. The logo sits centred; sign-out is pinned right. --- */
-.masthead { background: var(--navy); border-bottom: 3px solid var(--gold); }
-.masthead-inner {
-  max-width: 1040px; margin: 0 auto; padding: 1rem 1.25rem;
-  display: flex; align-items: center; justify-content: center; position: relative; min-height: 76px;
-}
-.masthead-logo {
-  /* brightness(0) crushes every opaque pixel to black, invert(1) then lifts it
-     to white. Alpha is untouched, so a transparent logo stays transparent and
-     a navy crest reads cleanly against the navy bar. */
-  display: block; height: 44px; width: auto; max-width: 340px;
-  filter: brightness(0) invert(1);
-}
-.wordmark {
-  font-family: Georgia, 'Times New Roman', Times, serif; text-align: center;
-  font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: #fff;
-  text-decoration: none; font-weight: 700;
-}
-.wordmark span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--gold); font-weight: 400; margin-top: 2px; }
-.masthead form { margin: 0; position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%); }
-@media (max-width: 560px) {
-  .masthead-inner { justify-content: flex-start; padding-right: 6.5rem; }
-  .masthead-logo { height: 34px; }
-}
-
-/* --- Navigation --- */
-nav.primary { background: var(--navy-soft); }
-nav.primary ul {
-  max-width: 1040px; margin: 0 auto; padding: 0 1.25rem; list-style: none;
-  display: flex; gap: 0.25rem; overflow-x: auto;
-}
-nav.primary a {
-  display: block; padding: 0.8rem 1rem; color: rgba(255,255,255,0.78); text-decoration: none;
-  font-size: 0.875rem; letter-spacing: 0.04em; white-space: nowrap; border-bottom: 3px solid transparent;
-}
-nav.primary a:hover { color: #fff; background: rgba(255,255,255,0.06); }
-nav.primary a[aria-current='page'] { color: #fff; border-bottom-color: var(--gold); font-weight: 600; }
-
-/* --- Layout --- */
-main { max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-.page-head { margin-bottom: 1.5rem; }
-.page-head p { color: var(--muted); margin: 0.35rem 0 0; font-size: 0.925rem; }
-
-.panel {
-  background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
-  box-shadow: var(--shadow); padding: 1.5rem; margin-bottom: 1.25rem;
-}
-.panel > h2 { padding-bottom: 0.75rem; border-bottom: 1px solid var(--rule); margin-bottom: 1.15rem; }
-.grid { display: grid; gap: 1.25rem; }
-@media (min-width: 860px) { .grid.two { grid-template-columns: 1fr 1fr; } }
-.grid.two.top { align-items: start; }
-
-/* --- Identity strip: who / year / book, at a glance --- */
-.identity { display: grid; gap: 0; }
-@media (min-width: 720px) { .identity { grid-template-columns: repeat(3, 1fr); } }
-.identity-cell { padding: 1.1rem 1.25rem; border-bottom: 1px solid var(--rule); }
-@media (min-width: 720px) {
-  .identity-cell { border-bottom: none; border-right: 1px solid var(--rule); }
-  .identity-cell:last-child { border-right: none; }
-}
-.identity-cell:last-child { border-bottom: none; }
-.identity-label {
-  font-size: 0.65rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem;
-}
-.identity-value { font-family: Georgia, serif; font-size: 1.3rem; color: var(--navy); font-weight: 700; line-height: 1.25; }
-.identity-sub { font-size: 0.85rem; color: var(--muted); margin-top: 0.15rem; }
-
-/* --- Forms --- */
-.field { margin-bottom: 1.15rem; }
-label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--navy); margin-bottom: 0.35rem; letter-spacing: 0.02em; }
-input[type=text], input[type=password], input[type=date], input[type=number], input[type=search], input[type=url], input[type=file], textarea {
-  width: 100%; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.95rem;
-  border: 1px solid var(--rule); border-radius: 2px; background: #fff; color: var(--ink);
-}
-input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid var(--navy); outline-offset: 2px;
-}
-.hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
-.field-error { font-size: 0.8rem; color: var(--rose); margin-top: 0.3rem; font-weight: 600; }
-input[aria-invalid='true'] { border-color: var(--rose); }
-
-.checks { display: grid; gap: 0.5rem; }
-.check { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
-.check input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--navy); }
-.check label { margin: 0; font-weight: 400; font-size: 0.9rem; color: var(--ink); }
-
-/* --- Buttons --- */
-.btn {
-  display: inline-block; padding: 0.6rem 1.15rem; font: inherit; font-size: 0.9rem; font-weight: 600;
-  border-radius: 2px; border: 1px solid var(--navy); background: var(--navy); color: #fff;
-  cursor: pointer; text-decoration: none; letter-spacing: 0.02em;
-}
-.btn:hover { background: #16305C; }
-.btn[disabled] { opacity: 0.55; cursor: default; }
-.btn.secondary { background: transparent; color: var(--navy); }
-.btn.secondary:hover { background: rgba(10,33,66,0.06); }
-.btn.small { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
-.actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
-
-/* --- Banners --- */
-.banner { padding: 0.85rem 1.1rem; border-radius: 2px; margin-bottom: 1.25rem; font-size: 0.9rem; border-left: 3px solid; }
-.banner.ok { background: #EEF6F1; border-color: #2FA46C; color: #17512F; }
-.banner.bad { background: #FBEEEE; border-color: var(--rose); color: #7A1A1E; }
-.banner.info { background: var(--wash); border-color: var(--navy); color: var(--navy); }
-
-/* --- Search results --- */
-.results { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
-.result {
-  display: flex; gap: 1rem; padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; background: #fff;
-}
-.result:hover { border-color: var(--navy); }
-.result img, .result .no-cover {
-  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--wash);
-  border: 1px solid var(--rule);
-}
-.result .no-cover { display: flex; align-items: center; justify-content: center; font-size: 0.55rem; color: var(--muted); text-align: center; letter-spacing: 0.06em; }
-.result-body { flex: 1; min-width: 0; }
-.result-title { font-family: Georgia, serif; font-weight: 700; color: var(--navy); font-size: 1rem; line-height: 1.3; }
-.result-meta { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
-.result form { margin: 0.6rem 0 0; }
-
-/* --- Email preview --- */
-.email-chrome { border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: #fff; }
-.email-chrome-bar { background: var(--wash); border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
-.email-chrome-body { padding: 1.25rem; font-family: Georgia, serif; font-size: 0.9rem; color: var(--ink); }
-.email-chrome-body .sep { height: 1px; background: var(--rule); margin: 1.25rem 0; border: 0; }
-
-textarea.code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem;
-  line-height: 1.5; min-height: 220px; white-space: pre; overflow-wrap: normal; overflow-x: auto;
-}
-
-dl.summary { margin: 0; display: grid; gap: 0.7rem; }
-dl.summary dt { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-top: 0.15rem; }
-dl.summary dd { margin: 0; color: var(--ink); }
-
-.cover-block { display: flex; gap: 1.25rem; align-items: flex-start; }
-.cover-block img { width: 94px; border-radius: 2px; border: 1px solid var(--rule); }
-.cover-block .no-cover {
-  width: 94px; height: 140px; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--wash);
-}
-
-/* --- Logo cropper --- */
-.crop-stage {
-  position: relative; margin: 0 auto; background: var(--wash);
-  background-image: linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%),
-                    linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%);
-  background-size: 16px 16px; background-position: 0 0, 8px 8px;
-  border: 1px solid var(--rule); user-select: none; touch-action: none; overflow: hidden;
-}
-.crop-stage img { display: block; max-width: 100%; -webkit-user-drag: none; user-select: none; }
-.crop-box {
-  position: absolute; border: 2px solid var(--navy); box-shadow: 0 0 0 9999px rgba(10, 33, 66, 0.45);
-  cursor: move; touch-action: none;
-}
-/* Handles sit wholly inside the crop box. Straddling the edge would put them
-   half outside the stage whenever the crop is flush against the image border -
-   which is the default - where the stage's overflow:hidden clips them and they
-   cannot be grabbed at all. */
-.crop-handle {
-  position: absolute; width: 16px; height: 16px; background: #fff;
-  border: 2px solid var(--navy); border-radius: 2px; touch-action: none;
-}
-.crop-handle[data-handle=nw] { left: 0; top: 0; cursor: nwse-resize; }
-.crop-handle[data-handle=ne] { right: 0; top: 0; cursor: nesw-resize; }
-.crop-handle[data-handle=sw] { left: 0; bottom: 0; cursor: nesw-resize; }
-.crop-handle[data-handle=se] { right: 0; bottom: 0; cursor: nwse-resize; }
-.crop-handle[data-handle=n] { left: 50%; top: 0; margin-left: -8px; cursor: ns-resize; }
-.crop-handle[data-handle=s] { left: 50%; bottom: 0; margin-left: -8px; cursor: ns-resize; }
-.crop-handle[data-handle=w] { left: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
-.crop-handle[data-handle=e] { right: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
-
-.crop-previews { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.25rem; }
-.crop-preview-pane { flex: 1 1 200px; }
-.crop-preview-label { font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
-.crop-preview-surface { padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; display: flex; align-items: center; justify-content: center; min-height: 72px; }
-.crop-preview-surface.on-white { background: #fff; }
-.crop-preview-surface.on-navy { background: var(--navy); }
-.crop-preview-surface img { max-width: 100%; max-height: 48px; display: block; }
-.crop-preview-surface.on-navy img { filter: brightness(0) invert(1); }
-
-.logo-slots { display: grid; gap: 1.25rem; }
-@media (min-width: 720px) { .logo-slots { grid-template-columns: 1fr 1fr; } }
-.logo-slot { border: 1px solid var(--rule); border-radius: 2px; padding: 1rem; }
-.logo-slot h3 { margin-bottom: 0.3rem; }
-.logo-slot .surface {
-  margin: 0.75rem 0; padding: 0.9rem; border-radius: 2px; display: flex; align-items: center;
-  justify-content: center; min-height: 76px; border: 1px solid var(--rule);
-}
-.logo-slot .surface.on-navy { background: var(--navy); }
-.logo-slot .surface.on-navy img { filter: brightness(0) invert(1); }
-.logo-slot .surface img { max-width: 100%; max-height: 52px; display: block; }
-.logo-slot .empty { color: var(--muted); font-size: 0.8rem; }
-
-/* --- Login --- */
-.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-.login-card { width: 100%; max-width: 380px; }
-.login-crest { text-align: center; margin-bottom: 1.5rem; }
-.login-crest img { max-width: 220px; max-height: 96px; width: auto; height: auto; display: inline-block; }
-.login-crest .wordmark { color: var(--navy); }
-.login-crest .wordmark span { color: var(--muted); }
-
-.visually-hidden {
-  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-}
-`.trim();
-}
-function brandMark() {
-  return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
-        <img class="masthead-logo" src="${SITE_WORDMARK}" alt="Berkhamsted" />
-      </a>`;
-}
-function layout(body, options) {
-  const banners = [
-    options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : "",
-    options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""
-  ].join("");
-  const nav = options.chromeless ? "" : `<nav class="primary" aria-label="Sections">
-    <ul>
-      ${NAV_ITEMS.map(
-    (item) => `<li><a href="${item.href}"${item.key === options.active ? ' aria-current="page"' : ""}>${escapeHtml(item.label)}</a></li>`
-  ).join("\n      ")}
-    </ul>
-  </nav>`;
-  const masthead = options.chromeless ? "" : `<header class="masthead">
-    <div class="masthead-inner">
-      ${brandMark()}
-      <form method="post" action="/admin/logout">
-        <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
-      </form>
-    </div>
-  </header>`;
-  const scripts = (options.scripts ?? []).map((src) => `<script src="${escapeHtml(src)}" defer></script>`).join("\n");
-  return `<!DOCTYPE html>
-<html lang="en-GB">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="robots" content="noindex, nofollow" />
-<title>${escapeHtml(options.title)} \u2014 Berkhamsted Reading Signature</title>
-<style>${styles()}</style>
-${scripts}
-</head>
-<body>
-${masthead}
-${nav}
-${options.chromeless ? body : `<main>${banners}${body}</main>`}
-</body>
-</html>`;
-}
-
-// src/worker/ui/pages.ts
-function csrfField(token) {
-  return `<input type="hidden" name="csrf" value="${escapeHtml(token)}" />`;
-}
-function fieldError(errors, name) {
-  const message = errors[name];
-  return message ? `<p class="field-error">${escapeHtml(message)}</p>` : "";
-}
-function invalidAttr(errors, name) {
-  return errors[name] ? ' aria-invalid="true"' : "";
-}
-function loginPage(options) {
-  const setupWarning = options.configured ? "" : `<div class="banner info">
-         <strong>Not configured yet.</strong> Set <code>ADMIN_USERNAME</code>,
-         <code>ADMIN_PASSWORD</code> and <code>SESSION_SECRET</code> as secrets on this
-         Worker in the Cloudflare dashboard, then reload this page.
-       </div>`;
-  const body = `<div class="login-wrap">
-  <div class="login-card">
-    <div class="login-crest">
-      <img src="${SITE_LOGO}" alt="Berkhamsted School" />
-    </div>
-    ${setupWarning}
-    ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ""}
-    ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""}
-    <div class="panel">
-      <h2>Sign in</h2>
-      <form method="post" action="/admin/login">
-        <div class="field">
-          <label for="username">Username</label>
-          <input type="text" id="username" name="username" autocomplete="username" required autofocus />
-        </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input type="password" id="password" name="password" autocomplete="current-password" required />
-        </div>
-        <button class="btn" type="submit" style="width:100%;">Sign in</button>
-      </form>
-    </div>
-    <p style="text-align:center;font-size:0.8rem;color:var(--muted);">
-      This is a private administration area. There is no public registration.
-    </p>
-  </div>
-</div>`;
-  return layout(body, { title: "Sign in", chromeless: true });
-}
-function dashboardPage(options) {
-  const { data, publicUrl } = options;
-  const { profile, book, year } = data;
-  const yearNote = year.status === "at-school" ? `Academic year ${escapeHtml(year.academicYearLabel)}` : "Outside school years";
-  const coverBlock = book ? options.signatureOptions.hasCover ? `<img src="/admin/image/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />` : '<div class="no-cover">No cover<br />stored</div>' : '<div class="no-cover">No book<br />set</div>';
-  const body = `
-<div class="page-head">
-  <h1>Dashboard</h1>
-  <p>Your signature updates itself wherever you have already pasted it, whenever you change your book or profile.</p>
-</div>
-
-<div class="panel" style="padding:0;">
-  <div class="identity">
-    <div class="identity-cell">
-      <div class="identity-label">Who</div>
-      <div class="identity-value">${escapeHtml(profile.name)}</div>
-      <div class="identity-sub">${escapeHtml(profile.house ? `${profile.house} House` : "No house set")}</div>
-    </div>
-    <div class="identity-cell">
-      <div class="identity-label">Year</div>
-      <div class="identity-value">${escapeHtml(year.label)}</div>
-      <div class="identity-sub">${yearNote} \xB7 calculated, not stored</div>
-    </div>
-    <div class="identity-cell">
-      <div class="identity-label">Reading</div>
-      <div class="identity-value">${escapeHtml(book ? book.title : "Nothing set")}</div>
-      <div class="identity-sub">${escapeHtml(book?.author || (book ? "Author unknown" : "Choose a book to begin"))}</div>
-    </div>
-  </div>
-</div>
-
-<div class="grid two">
-  <div class="panel">
-    <h2>Current book</h2>
-    <div class="cover-block">
-      ${coverBlock}
-      <div>
-        ${book ? `<dl class="summary" style="display:block;">
-                 <dd style="font-family:Georgia,serif;font-size:1.05rem;color:var(--navy);font-weight:700;">${escapeHtml(book.title)}</dd>
-                 <dd style="color:var(--muted);margin-top:0.2rem;">${escapeHtml(book.author || "Author unknown")}</dd>
-                 ${book.publicationYear ? `<dd style="color:var(--muted);font-size:0.85rem;margin-top:0.35rem;">Published ${book.publicationYear}</dd>` : ""}
-                 ${book.isbn ? `<dd style="color:var(--muted);font-size:0.85rem;">ISBN ${escapeHtml(book.isbn)}</dd>` : ""}
-               </dl>` : '<p style="color:var(--muted);">No book is set yet. The signature will omit the reading section until you choose one.</p>'}
-        <div class="actions">
-          <a class="btn small" href="/admin/book">${book ? "Change book" : "Choose a book"}</a>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2>Signature preview</h2>
-    ${renderSignatureHtml(data, options.signatureOptions)}
-    <div class="actions">
-      <a class="btn small" href="/admin/signature">Get the signature</a>
-      <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
-    </div>
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Public signature address</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    Anyone with this link can view the signature. Nobody can change it without signing in here.
-  </p>
-  <input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" />
-</div>`;
-  return layout(body, {
-    title: "Dashboard",
-    active: "dashboard",
-    notice: options.notice ?? null,
-    error: options.error ?? null
-  });
-}
-function resultItem(result, csrfToken) {
-  const cover = result.coverUrl !== null ? `<img src="/admin/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />` : '<div class="no-cover">NO COVER</div>';
-  const meta = [
-    result.author || "Author unknown",
-    result.publicationYear !== null ? String(result.publicationYear) : null,
-    result.isbn !== null ? `ISBN ${result.isbn}` : null
-  ].filter((part) => part !== null).join("  \xB7  ");
-  return `<li class="result">
-  ${cover}
-  <div class="result-body">
-    <div class="result-title">${escapeHtml(result.title)}</div>
-    <div class="result-meta">${escapeHtml(meta)}</div>
-    <form method="post" action="/admin/book">
-      ${csrfField(csrfToken)}
-      <input type="hidden" name="action" value="select" />
-      <input type="hidden" name="title" value="${escapeHtml(result.title)}" />
-      <input type="hidden" name="author" value="${escapeHtml(result.author)}" />
-      <input type="hidden" name="coverUrl" value="${escapeHtml(result.coverUrl ?? "")}" />
-      <input type="hidden" name="isbn" value="${escapeHtml(result.isbn ?? "")}" />
-      <input type="hidden" name="publicationYear" value="${escapeHtml(
-    result.publicationYear !== null ? String(result.publicationYear) : ""
-  )}" />
-      <input type="hidden" name="source" value="${escapeHtml(result.source)}" />
-      <button class="btn small" type="submit">Make this my current book</button>
-    </form>
-  </div>
-</li>`;
-}
-function bookPage(options) {
-  const { results, warnings, searched, errors, csrfToken } = options;
-  const warningBanners = warnings.map((warning) => `<div class="banner info">${escapeHtml(warning)}</div>`).join("");
-  const resultsBlock = !searched ? "" : results.length === 0 ? `<div class="banner info">
-           No books matched that search. Try a different spelling, search by author,
-           or add the book manually below.
-         </div>` : `<ul class="results">${results.map((result) => resultItem(result, csrfToken)).join("\n")}</ul>`;
-  const body = `
-<div class="page-head">
-  <h1>Change book</h1>
-  <p>Search for what you are reading, or enter it by hand if the search cannot find it.</p>
-</div>
-
-${options.current ? `<div class="banner info">
-         Currently reading <strong>${escapeHtml(options.current.title)}</strong>${options.current.author ? ` by ${escapeHtml(options.current.author)}` : ""}.
-       </div>` : ""}
-
-<div class="panel">
-  <h2>Search</h2>
-  <form method="get" action="/admin/book" role="search">
-    <div class="field">
-      <label for="q">Title, author or ISBN</label>
-      <input type="search" id="q" name="q" value="${escapeHtml(options.query)}"
-             placeholder="e.g. Wolf Hall, or 9780007230204"${invalidAttr(errors, "query")} />
-      ${fieldError(errors, "query")}
-      <p class="hint">Searches Google Books and Open Library together. Results are cached for an hour.</p>
-    </div>
-    <button class="btn" type="submit">Search</button>
-  </form>
-  ${warningBanners}
-  ${resultsBlock}
-</div>
-
-<div class="panel">
-  <h2>Enter manually</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    Use this when the search cannot find your book, or when you want to correct its details.
-  </p>
-  <form method="post" action="/admin/book">
-    ${csrfField(csrfToken)}
-    <input type="hidden" name="action" value="manual" />
-    <div class="grid two">
-      <div class="field">
-        <label for="title">Title</label>
-        <input type="text" id="title" name="title" required maxlength="200"${invalidAttr(errors, "title")} />
-        ${fieldError(errors, "title")}
-      </div>
-      <div class="field">
-        <label for="author">Author</label>
-        <input type="text" id="author" name="author" maxlength="160"${invalidAttr(errors, "author")} />
-        ${fieldError(errors, "author")}
-      </div>
-    </div>
-    <div class="grid two">
-      <div class="field">
-        <label for="publicationYear">Publication year</label>
-        <input type="number" id="publicationYear" name="publicationYear" min="1000" max="2100"${invalidAttr(errors, "publicationYear")} />
-        ${fieldError(errors, "publicationYear")}
-      </div>
-      <div class="field">
-        <label for="isbn">ISBN</label>
-        <input type="text" id="isbn" name="isbn" maxlength="20"${invalidAttr(errors, "isbn")} />
-        ${fieldError(errors, "isbn")}
-      </div>
-    </div>
-    <div class="field">
-      <label for="coverUrl">Cover image URL</label>
-      <input type="url" id="coverUrl" name="coverUrl" placeholder="https://..."${invalidAttr(errors, "coverUrl")} />
-      ${fieldError(errors, "coverUrl")}
-      <p class="hint">Optional. The image is downloaded and stored here, so the signature keeps working if the original link stops.</p>
-    </div>
-    <button class="btn" type="submit">Set as current book</button>
-  </form>
-</div>`;
-  return layout(body, {
-    title: "Change book",
-    active: "book",
-    notice: options.notice ?? null,
-    error: options.error ?? null
-  });
-}
-function profilePage(options) {
-  const { profile } = options.data;
-  const { errors, csrfToken } = options;
-  let yearExplanation = "";
-  try {
-    const year = calculateSchoolYear(profile.dateOfBirth);
-    yearExplanation = `Born in the ${year.cohortStart}/${String((year.cohortStart + 1) % 100).padStart(2, "0")} cohort, so in academic year ${year.academicYearLabel} this is <strong>${escapeHtml(year.label)}</strong>.`;
-  } catch {
-    yearExplanation = "The date of birth could not be interpreted.";
-  }
-  const check = (name, label, checked) => `<div class="check">
-       <input type="checkbox" id="${name}" name="${name}"${checked ? " checked" : ""} />
-       <label for="${name}">${escapeHtml(label)}</label>
-     </div>`;
-  const body = `
-<div class="page-head">
-  <h1>Profile</h1>
-  <p>Your year group is calculated from your date of birth and cannot be set by hand.</p>
-</div>
-
-<div class="panel">
-  <h2>Details</h2>
-  <form method="post" action="/admin/profile">
-    ${csrfField(csrfToken)}
-    <div class="grid two">
-      <div class="field">
-        <label for="name">Name</label>
-        <input type="text" id="name" name="name" required maxlength="80"
-               value="${escapeHtml(profile.name)}"${invalidAttr(errors, "name")} />
-        ${fieldError(errors, "name")}
-      </div>
-      <div class="field">
-        <label for="dateOfBirth">Date of birth</label>
-        <input type="date" id="dateOfBirth" name="dateOfBirth" required
-               value="${escapeHtml(profile.dateOfBirth)}"${invalidAttr(errors, "dateOfBirth")} />
-        ${fieldError(errors, "dateOfBirth")}
-        <p class="hint">${yearExplanation}</p>
-      </div>
-    </div>
-    <div class="grid two">
-      <div class="field">
-        <label for="house">House</label>
-        <input type="text" id="house" name="house" maxlength="40"
-               value="${escapeHtml(profile.house)}"${invalidAttr(errors, "house")} />
-        ${fieldError(errors, "house")}
-      </div>
-      <div class="field">
-        <label for="school">School</label>
-        <input type="text" id="school" name="school" maxlength="100"
-               value="${escapeHtml(profile.school)}"${invalidAttr(errors, "school")} />
-        ${fieldError(errors, "school")}
-      </div>
-    </div>
-    <div class="field">
-      <label for="subtitle">Subtitle</label>
-      <input type="text" id="subtitle" name="subtitle" maxlength="100"
-             value="${escapeHtml(profile.subtitle)}"${invalidAttr(errors, "subtitle")} />
-      ${fieldError(errors, "subtitle")}
-      <p class="hint">Optional line beneath the school, e.g. a role or a form.</p>
-    </div>
-
-    <fieldset style="border:1px solid var(--rule);border-radius:2px;padding:1rem;margin:0 0 1rem;">
-      <legend style="font-size:0.8rem;font-weight:600;color:var(--navy);padding:0 0.4rem;">Show in signature</legend>
-      <div class="checks">
-        ${check("showYear", "Year group", profile.showYear)}
-        ${check("showHouse", "House", profile.showHouse)}
-        ${check("showSchool", "School", profile.showSchool)}
-        ${check("showSubtitle", "Subtitle", profile.showSubtitle)}
-      </div>
-    </fieldset>
-
-    <button class="btn" type="submit">Save profile</button>
-  </form>
-</div>
-
-<div class="panel" id="logo-cropper">
-  <h2>Signature logo</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    The logo shown in your <strong>email signature</strong>. It defaults to the school crest;
-    upload your own and crop it if you want something different.
-  </p>
-  <p class="hint">
-    The logo in the bar at the top of this site and on the sign-in page is part of the site's
-    design and is not editable here.
-  </p>
-
-  <div class="logo-slot" style="max-width:420px;">
-    <h3>Currently used</h3>
-    <div class="surface">
-      <img src="${options.hasLogo ? `/admin/image/logo?v=${options.data.revision}` : escapeHtml(SITE_LOGO)}" alt="Logo used in the signature" />
-    </div>
-    <p class="hint" style="margin:0;">
-      ${options.hasLogo ? "Your uploaded crop." : "The default school crest."}
-    </p>
-    ${options.hasOriginal ? `<div class="actions" style="margin-top:0.75rem;">
-             <button class="btn secondary small" type="button" id="crop-recrop"
-                     data-src="/admin/image/logo-original?v=${options.data.revision}">Re-crop</button>
-           </div>` : ""}
-  </div>
-
-  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
-    ${csrfField(csrfToken)}
-    <div class="field">
-      <label for="logo-file">Upload a different logo</label>
-      <input type="file" id="logo-file" name="logo"
-             accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, "logo")} />
-      ${fieldError(errors, "logo")}
-      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Transparent PNG works best.</p>
-    </div>
-
-    <button class="btn" type="submit" id="logo-submit">Upload</button>
-
-    <div id="crop-panel" hidden>
-      <div class="field">
-        <label id="crop-heading">Crop for the email signature</label>
-        <div class="crop-stage" id="crop-stage">
-          <img id="crop-image" alt="" />
-          <div class="crop-box" id="crop-box" tabindex="0" role="application"
-               aria-label="Crop area. Arrow keys move it, hold Alt and use arrow keys to resize.">
-            <span class="crop-handle" data-handle="nw"></span>
-            <span class="crop-handle" data-handle="n"></span>
-            <span class="crop-handle" data-handle="ne"></span>
-            <span class="crop-handle" data-handle="e"></span>
-            <span class="crop-handle" data-handle="se"></span>
-            <span class="crop-handle" data-handle="s"></span>
-            <span class="crop-handle" data-handle="sw"></span>
-            <span class="crop-handle" data-handle="w"></span>
-          </div>
-        </div>
-        <p class="hint" id="crop-dims"></p>
-        <p class="hint" id="crop-status" role="status"></p>
-      </div>
-
-      <div class="crop-previews">
-        <div class="crop-preview-pane">
-          <div class="crop-preview-label">As it will appear in the signature</div>
-          <div class="crop-preview-surface on-white">
-            <img id="crop-preview" alt="Preview of the cropped logo" />
-          </div>
-        </div>
-      </div>
-
-      <div class="actions">
-        <button class="btn" type="submit" id="crop-save">Save crop</button>
-        <button class="btn secondary small" type="button" id="crop-reset">Reset crop</button>
-        <button class="btn secondary small" type="button" id="crop-cancel">Cancel</button>
-      </div>
-    </div>
-  </form>
-
-  ${options.hasLogo ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
-           ${csrfField(csrfToken)}
-           <button class="btn secondary small" type="submit">Revert to the default crest</button>
-         </form>` : ""}
-</div>`;
-  return layout(body, {
-    title: "Profile",
-    active: "profile",
-    scripts: ["/admin/js/cropper.js"],
-    notice: options.notice ?? null,
-    error: options.error ?? null
-  });
-}
-function signatureRenderPayload(options) {
-  const { data } = options;
-  return JSON.stringify({
-    revision: data.revision,
-    name: data.profile.name,
-    credentials: buildCredentialLine(data),
-    school: data.profile.showSchool ? data.profile.school : "",
-    subtitle: data.profile.showSubtitle ? data.profile.subtitle : "",
-    // The public logo route, not the admin one: it falls back to the built-in
-    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
-    // transparent pixel that the canvas would scale into an empty band.
-    logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
-    coverUrl: options.signatureOptions.hasCover ? `/admin/image/cover?v=${data.revision}` : null,
-    book: data.book ? { title: data.book.title, author: data.book.author } : null,
-    colours: {
-      navy: BRAND.navy,
-      rose: BRAND.rose,
-      gold: BRAND.gold,
-      muted: BRAND.muted
-    }
-  });
-}
-function signaturePage(options) {
-  const { data, publicUrl, signatureHtml, imageUrl, imageSize } = options;
-  const altText = [
-    data.profile.name,
-    buildCredentialLine(data),
-    data.profile.showSchool ? data.profile.school : "",
-    data.book ? `Currently reading ${data.book.title}${data.book.author ? ` by ${data.book.author}` : ""}` : ""
-  ].filter((part) => part !== "").join(" \u2014 ");
-  const imageSnippet = `<a href="${escapeHtml(publicUrl)}"><img src="${escapeHtml(imageUrl)}"` + (imageSize ? ` width="${imageSize.width}"` : "") + ` alt="${escapeHtml(altText)}" style="display:block;border:0;outline:none;text-decoration:none;` + (imageSize ? `width:${imageSize.width}px;max-width:100%;height:auto;` : "") + `" /></a>`;
-  const body = `
-<div class="page-head">
-  <h1>Signature</h1>
-  <p>Paste this into your email client once. It keeps itself up to date.</p>
-</div>
-
-<div class="panel" id="signature-image"
-     data-csrf="${escapeHtml(options.csrfToken)}"
-     data-stale="${options.imageStale ? "true" : "false"}"
-     data-signature="${escapeHtml(signatureRenderPayload(options))}">
-  <h2>Your signature</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    Everything below \u2014 your name, year, house, school, book and cover \u2014 is drawn into a single
-    image at a fixed address. Change any of it and every signature you have already sent starts
-    showing the new version, with nothing to re-paste.
-  </p>
-
-  <div class="email-chrome">
-    <div class="email-chrome-bar">To: someone@example.com &nbsp;\xB7&nbsp; Subject: Prep</div>
-    <div class="email-chrome-body">
-      <p>Dear Sir,</p>
-      <p>Please find my essay attached.</p>
-      <p>With thanks,</p>
-      <hr class="sep" />
-      <img id="signature-image-preview" data-src="${escapeHtml(imageUrl)}"
-           src="${escapeHtml(imageUrl)}"${imageSize ? ` width="${imageSize.width}"` : ""}
-           alt="${escapeHtml(altText)}"
-           style="display:block;max-width:100%;height:auto;" />
-    </div>
-  </div>
-
-  <div class="actions">
-    <button class="btn secondary small" type="button" id="signature-image-rebuild" hidden>Rebuild image</button>
-    <span id="signature-image-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Copy this into your email signature</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    Select everything in the box and copy it, then paste into your email signature editor.
-  </p>
-  <label class="visually-hidden" for="signature-html">Email signature HTML</label>
-  <textarea class="code" id="signature-html" readonly spellcheck="false" style="min-height:120px;">${escapeHtml(imageSnippet)}</textarea>
-  <div class="actions">
-    <button class="btn" type="button" id="copy-button" hidden>Copy HTML</button>
-    <span id="copy-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
-  </div>
-  <p class="hint">
-    In Outlook on Windows it usually pastes better to open the
-    <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">public signature page</a>,
-    select the signature there and copy that instead.
-  </p>
-</div>
-
-<div class="panel">
-  <h2>Stable addresses</h2>
-  <dl class="summary" style="grid-template-columns:8rem 1fr;">
-    <dt>Image</dt>
-    <dd><input type="text" readonly value="${escapeHtml(imageUrl)}" aria-label="Signature image URL" /></dd>
-    <dt>Web page</dt>
-    <dd><input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" /></dd>
-  </dl>
-  <p class="hint">
-    Neither address ever changes. Anyone with them can view your signature; nobody can alter it
-    without signing in here.
-  </p>
-</div>
-
-<div class="panel">
-  <h2>Text version</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    The same signature built from real text rather than an image. It is sharper and can be read
-    by screen readers, but <strong>only the cover updates by itself</strong> \u2014 the words are fixed
-    at the moment you copy them, so you would need to re-copy this after every change. Use it only
-    if an email client refuses the image.
-  </p>
-  <label class="visually-hidden" for="signature-html-text">Text-based email signature HTML</label>
-  <textarea class="code" id="signature-html-text" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
-</div>
-
-<div class="panel">
-  <h2>Before you paste it</h2>
-  <ul style="font-size:0.9rem;color:var(--ink);padding-left:1.2rem;">
-    <li style="margin-bottom:0.5rem;">
-      <strong>Remote images.</strong> The signature loads when the email is opened. Most clients
-      show it straight away for a sender the reader has written to before; some, including Outlook
-      on Windows with default settings, ask them to click \u201CDownload pictures\u201D first. The alt text
-      carries your details in the meantime.
-    </li>
-    <li style="margin-bottom:0.5rem;">
-      <strong>Gmail caches images on its own servers.</strong> A change can take a while to appear
-      for Gmail readers even though the address is unchanged. Everywhere else it updates within
-      about five minutes.
-    </li>
-    <li>
-      <strong>Old emails show your current book.</strong> That is the intended behaviour: the
-      signature is always live rather than a snapshot of the day you sent it.
-    </li>
-  </ul>
-</div>`;
-  return layout(body, {
-    title: "Signature",
-    active: "signature",
-    notice: options.notice ?? null,
-    scripts: ["/admin/js/copy.js", "/admin/js/signature-image.js"]
-  });
 }
 
 // src/worker/ui/clientScripts.ts
@@ -2394,6 +1590,918 @@ var SIGNATURE_IMAGE_JS = `(function () {
 })();
 `;
 
+// src/worker/ui/layout.ts
+var SITE_LOGO = "/assets/berkhamsted-logo.png";
+var SITE_WORDMARK = "/assets/berkhamsted-wordmark.png";
+var NAV_ITEMS = [
+  { key: "dashboard", href: "/admin", label: "Dashboard" },
+  { key: "book", href: "/admin/book", label: "Change book" },
+  { key: "profile", href: "/admin/profile", label: "Profile" },
+  { key: "signature", href: "/admin/signature", label: "Signature" }
+];
+function styles() {
+  return `
+:root {
+  --navy: ${BRAND.navy};
+  --navy-soft: #16305C;
+  --gold: ${BRAND.gold};
+  --rose: ${BRAND.rose};
+  --paper: #FFFFFF;
+  --wash: ${BRAND.wash};
+  --ink: ${BRAND.ink};
+  --muted: ${BRAND.muted};
+  --rule: ${BRAND.rule};
+  --shadow: 0 1px 2px rgba(10, 33, 66, 0.05), 0 8px 24px rgba(10, 33, 66, 0.05);
+}
+
+* { box-sizing: border-box; }
+
+/* A class setting display outranks the user agent's [hidden] rule, so the
+   hidden attribute would silently do nothing on .btn elements. That would
+   leave the copy button visible with JavaScript disabled, and the upload
+   button visible while cropping, so state it explicitly. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: Georgia, 'Times New Roman', Times, serif; color: var(--navy); margin: 0; font-weight: 700; }
+h1 { font-size: 1.75rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; }
+h3 { font-size: 0.95rem; }
+p { margin: 0 0 1rem; }
+p:last-child { margin-bottom: 0; }
+a { color: var(--navy); }
+
+/* --- Masthead. The logo sits centred; sign-out is pinned right. --- */
+.masthead { background: var(--navy); border-bottom: 3px solid var(--gold); }
+.masthead-inner {
+  max-width: 1040px; margin: 0 auto; padding: 1rem 1.25rem;
+  display: flex; align-items: center; justify-content: center; position: relative; min-height: 76px;
+}
+.masthead-logo {
+  /* brightness(0) crushes every opaque pixel to black, invert(1) then lifts it
+     to white. Alpha is untouched, so a transparent logo stays transparent and
+     a navy crest reads cleanly against the navy bar. */
+  display: block; height: 44px; width: auto; max-width: 340px;
+  filter: brightness(0) invert(1);
+}
+.wordmark {
+  font-family: Georgia, 'Times New Roman', Times, serif; text-align: center;
+  font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: #fff;
+  text-decoration: none; font-weight: 700;
+}
+.wordmark span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--gold); font-weight: 400; margin-top: 2px; }
+.masthead-account {
+  position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 0.75rem;
+}
+.masthead-account form { margin: 0; }
+.masthead-user { color: rgba(255,255,255,0.8); font-size: 0.82rem; }
+@media (max-width: 700px) { .masthead-user { display: none; } }
+@media (max-width: 560px) {
+  .masthead-inner { justify-content: flex-start; padding-right: 6.5rem; }
+  .masthead-logo { height: 34px; }
+}
+
+/* --- Navigation --- */
+nav.primary { background: var(--navy-soft); }
+nav.primary ul {
+  max-width: 1040px; margin: 0 auto; padding: 0 1.25rem; list-style: none;
+  display: flex; gap: 0.25rem; overflow-x: auto;
+}
+nav.primary a {
+  display: block; padding: 0.8rem 1rem; color: rgba(255,255,255,0.78); text-decoration: none;
+  font-size: 0.875rem; letter-spacing: 0.04em; white-space: nowrap; border-bottom: 3px solid transparent;
+}
+nav.primary a:hover { color: #fff; background: rgba(255,255,255,0.06); }
+nav.primary a[aria-current='page'] { color: #fff; border-bottom-color: var(--gold); font-weight: 600; }
+
+/* --- Layout --- */
+main { max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+.page-head { margin-bottom: 1.5rem; }
+.page-head p { color: var(--muted); margin: 0.35rem 0 0; font-size: 0.925rem; }
+
+.panel {
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
+  box-shadow: var(--shadow); padding: 1.5rem; margin-bottom: 1.25rem;
+}
+.panel > h2 { padding-bottom: 0.75rem; border-bottom: 1px solid var(--rule); margin-bottom: 1.15rem; }
+.grid { display: grid; gap: 1.25rem; }
+@media (min-width: 860px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.grid.two.top { align-items: start; }
+
+/* --- Identity strip: who / year / book, at a glance --- */
+.identity { display: grid; gap: 0; }
+@media (min-width: 720px) { .identity { grid-template-columns: repeat(3, 1fr); } }
+.identity-cell { padding: 1.1rem 1.25rem; border-bottom: 1px solid var(--rule); }
+@media (min-width: 720px) {
+  .identity-cell { border-bottom: none; border-right: 1px solid var(--rule); }
+  .identity-cell:last-child { border-right: none; }
+}
+.identity-cell:last-child { border-bottom: none; }
+.identity-label {
+  font-size: 0.65rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem;
+}
+.identity-value { font-family: Georgia, serif; font-size: 1.3rem; color: var(--navy); font-weight: 700; line-height: 1.25; }
+.identity-sub { font-size: 0.85rem; color: var(--muted); margin-top: 0.15rem; }
+
+/* --- Forms --- */
+.field { margin-bottom: 1.15rem; }
+label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--navy); margin-bottom: 0.35rem; letter-spacing: 0.02em; }
+input[type=text], input[type=password], input[type=date], input[type=number], input[type=search], input[type=url], input[type=file], textarea {
+  width: 100%; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.95rem;
+  border: 1px solid var(--rule); border-radius: 2px; background: #fff; color: var(--ink);
+}
+input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--navy); outline-offset: 2px;
+}
+.hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
+.field-error { font-size: 0.8rem; color: var(--rose); margin-top: 0.3rem; font-weight: 600; }
+input[aria-invalid='true'] { border-color: var(--rose); }
+
+.checks { display: grid; gap: 0.5rem; }
+.check { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
+.check input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--navy); }
+.check label { margin: 0; font-weight: 400; font-size: 0.9rem; color: var(--ink); }
+
+/* --- Buttons --- */
+.btn {
+  display: inline-block; padding: 0.6rem 1.15rem; font: inherit; font-size: 0.9rem; font-weight: 600;
+  border-radius: 2px; border: 1px solid var(--navy); background: var(--navy); color: #fff;
+  cursor: pointer; text-decoration: none; letter-spacing: 0.02em;
+}
+.btn:hover { background: #16305C; }
+.btn[disabled] { opacity: 0.55; cursor: default; }
+.btn.secondary { background: transparent; color: var(--navy); }
+.btn.secondary:hover { background: rgba(10,33,66,0.06); }
+.btn.small { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
+.actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
+
+/* --- Banners --- */
+.banner { padding: 0.85rem 1.1rem; border-radius: 2px; margin-bottom: 1.25rem; font-size: 0.9rem; border-left: 3px solid; }
+.banner.ok { background: #EEF6F1; border-color: #2FA46C; color: #17512F; }
+.banner.bad { background: #FBEEEE; border-color: var(--rose); color: #7A1A1E; }
+.banner.info { background: var(--wash); border-color: var(--navy); color: var(--navy); }
+
+/* --- Search results --- */
+.results { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
+.result {
+  display: flex; gap: 1rem; padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; background: #fff;
+}
+.result:hover { border-color: var(--navy); }
+.result img, .result .no-cover {
+  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--wash);
+  border: 1px solid var(--rule);
+}
+.result .no-cover { display: flex; align-items: center; justify-content: center; font-size: 0.55rem; color: var(--muted); text-align: center; letter-spacing: 0.06em; }
+.result-body { flex: 1; min-width: 0; }
+.result-title { font-family: Georgia, serif; font-weight: 700; color: var(--navy); font-size: 1rem; line-height: 1.3; }
+.result-meta { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
+.result form { margin: 0.6rem 0 0; }
+
+/* --- Email preview --- */
+.email-chrome { border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: #fff; }
+.email-chrome-bar { background: var(--wash); border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
+.email-chrome-body { padding: 1.25rem; font-family: Georgia, serif; font-size: 0.9rem; color: var(--ink); }
+.email-chrome-body .sep { height: 1px; background: var(--rule); margin: 1.25rem 0; border: 0; }
+
+textarea.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem;
+  line-height: 1.5; min-height: 220px; white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+
+dl.summary { margin: 0; display: grid; gap: 0.7rem; }
+dl.summary dt { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-top: 0.15rem; }
+dl.summary dd { margin: 0; color: var(--ink); }
+
+.cover-block { display: flex; gap: 1.25rem; align-items: flex-start; }
+.cover-block img { width: 94px; border-radius: 2px; border: 1px solid var(--rule); }
+.cover-block .no-cover {
+  width: 94px; height: 140px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--wash);
+}
+
+/* --- Logo cropper --- */
+.crop-stage {
+  position: relative; margin: 0 auto; background: var(--wash);
+  background-image: linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%),
+                    linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+  border: 1px solid var(--rule); user-select: none; touch-action: none; overflow: hidden;
+}
+.crop-stage img { display: block; max-width: 100%; -webkit-user-drag: none; user-select: none; }
+.crop-box {
+  position: absolute; border: 2px solid var(--navy); box-shadow: 0 0 0 9999px rgba(10, 33, 66, 0.45);
+  cursor: move; touch-action: none;
+}
+/* Handles sit wholly inside the crop box. Straddling the edge would put them
+   half outside the stage whenever the crop is flush against the image border -
+   which is the default - where the stage's overflow:hidden clips them and they
+   cannot be grabbed at all. */
+.crop-handle {
+  position: absolute; width: 16px; height: 16px; background: #fff;
+  border: 2px solid var(--navy); border-radius: 2px; touch-action: none;
+}
+.crop-handle[data-handle=nw] { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=ne] { right: 0; top: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=sw] { left: 0; bottom: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=se] { right: 0; bottom: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=n] { left: 50%; top: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=s] { left: 50%; bottom: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=w] { left: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+.crop-handle[data-handle=e] { right: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+
+.crop-previews { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.crop-preview-pane { flex: 1 1 200px; }
+.crop-preview-label { font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
+.crop-preview-surface { padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; display: flex; align-items: center; justify-content: center; min-height: 72px; }
+.crop-preview-surface.on-white { background: #fff; }
+.crop-preview-surface.on-navy { background: var(--navy); }
+.crop-preview-surface img { max-width: 100%; max-height: 48px; display: block; }
+.crop-preview-surface.on-navy img { filter: brightness(0) invert(1); }
+
+.logo-slots { display: grid; gap: 1.25rem; }
+@media (min-width: 720px) { .logo-slots { grid-template-columns: 1fr 1fr; } }
+.logo-slot { border: 1px solid var(--rule); border-radius: 2px; padding: 1rem; }
+.logo-slot h3 { margin-bottom: 0.3rem; }
+.logo-slot .surface {
+  margin: 0.75rem 0; padding: 0.9rem; border-radius: 2px; display: flex; align-items: center;
+  justify-content: center; min-height: 76px; border: 1px solid var(--rule);
+}
+.logo-slot .surface.on-navy { background: var(--navy); }
+.logo-slot .surface.on-navy img { filter: brightness(0) invert(1); }
+.logo-slot .surface img { max-width: 100%; max-height: 52px; display: block; }
+.logo-slot .empty { color: var(--muted); font-size: 0.8rem; }
+
+/* --- Login --- */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+.login-card { width: 100%; max-width: 380px; }
+.login-crest { text-align: center; margin-bottom: 1.5rem; }
+.login-crest img { max-width: 220px; max-height: 96px; width: auto; height: auto; display: inline-block; }
+.login-crest .wordmark { color: var(--navy); }
+.login-crest .wordmark span { color: var(--muted); }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+`.trim();
+}
+function brandMark() {
+  return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+        <img class="masthead-logo" src="${SITE_WORDMARK}" alt="Berkhamsted" />
+      </a>`;
+}
+function layout(body, options) {
+  const banners = [
+    options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : "",
+    options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""
+  ].join("");
+  const nav = options.chromeless ? "" : `<nav class="primary" aria-label="Sections">
+    <ul>
+      ${NAV_ITEMS.map(
+    (item) => `<li><a href="${item.href}"${item.key === options.active ? ' aria-current="page"' : ""}>${escapeHtml(item.label)}</a></li>`
+  ).join("\n      ")}
+    </ul>
+  </nav>`;
+  const masthead = options.chromeless ? "" : `<header class="masthead">
+    <div class="masthead-inner">
+      ${brandMark()}
+      <div class="masthead-account">
+        ${options.username ? `<span class="masthead-user">${escapeHtml(options.username)}</span>` : ""}
+        <form method="post" action="/admin/logout">
+          <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
+        </form>
+      </div>
+    </div>
+  </header>`;
+  const scripts = (options.scripts ?? []).map((src) => `<script src="${escapeHtml(src)}" defer></script>`).join("\n");
+  return `<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>${escapeHtml(options.title)} \u2014 Berkhamsted Reading Signature</title>
+<style>${styles()}</style>
+${scripts}
+</head>
+<body>
+${masthead}
+${nav}
+${options.chromeless ? body : `<main>${banners}${body}</main>`}
+</body>
+</html>`;
+}
+
+// src/worker/ui/pages.ts
+function csrfField(token) {
+  return `<input type="hidden" name="csrf" value="${escapeHtml(token)}" />`;
+}
+function fieldError(errors, name) {
+  const message = errors[name];
+  return message ? `<p class="field-error">${escapeHtml(message)}</p>` : "";
+}
+function invalidAttr(errors, name) {
+  return errors[name] ? ' aria-invalid="true"' : "";
+}
+function loginPage(options) {
+  const body = `<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-crest">
+      <img src="${SITE_LOGO}" alt="Berkhamsted School" />
+    </div>
+    ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ""}
+    ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""}
+    <div class="panel">
+      <h2>Sign in</h2>
+      <form method="post" action="/admin/login">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" autocomplete="username" required autofocus />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required />
+        </div>
+        <button class="btn" type="submit" style="width:100%;">Sign in</button>
+      </form>
+    </div>
+    <p style="text-align:center;font-size:0.9rem;">
+      No account yet? <a href="/admin/register">Create one</a>${options.signupRestricted ? " \u2014 you will need an invitation code." : "."}
+    </p>
+  </div>
+</div>`;
+  return layout(body, { title: "Sign in", chromeless: true });
+}
+function registerPage(options) {
+  const v = options.values ?? {};
+  const { errors } = options;
+  const body = `<div class="login-wrap">
+  <div class="login-card" style="max-width:480px;">
+    <div class="login-crest">
+      <img src="${SITE_LOGO}" alt="Berkhamsted School" />
+    </div>
+    ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ""}
+    <div class="panel">
+      <h2>Create an account</h2>
+      <p style="color:var(--muted);font-size:0.9rem;">
+        Your signature is yours alone. Nobody else can change it, and you cannot change anyone
+        else's.
+      </p>
+      <form method="post" action="/admin/register">
+        ${options.signupRestricted ? `<div class="field">
+                 <label for="code">Invitation code</label>
+                 <input type="text" id="code" name="code" required${invalidAttr(errors, "code")} />
+                 ${fieldError(errors, "code")}
+               </div>` : ""}
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" required autocomplete="username"
+                 value="${escapeHtml(v.username ?? "")}"${invalidAttr(errors, "username")} />
+          ${fieldError(errors, "username")}
+          <p class="hint">What you sign in with. Letters, numbers, full stops, hyphens, underscores.</p>
+        </div>
+        <div class="field">
+          <label for="slug">Signature web address</label>
+          <input type="text" id="slug" name="slug" placeholder="leave blank to use your username"
+                 value="${escapeHtml(v.slug ?? "")}"${invalidAttr(errors, "slug")} />
+          ${fieldError(errors, "slug")}
+          <p class="hint">Your signature will live at <code>/signature/&lt;this&gt;</code>. It is public.</p>
+        </div>
+        <div class="field">
+          <label for="name">Name to show in the signature</label>
+          <input type="text" id="name" name="name" required maxlength="80"
+                 value="${escapeHtml(v.name ?? "")}"${invalidAttr(errors, "name")} />
+          ${fieldError(errors, "name")}
+        </div>
+        <div class="field">
+          <label for="dateOfBirth">Date of birth</label>
+          <input type="date" id="dateOfBirth" name="dateOfBirth" required
+                 value="${escapeHtml(v.dateOfBirth ?? "")}"${invalidAttr(errors, "dateOfBirth")} />
+          ${fieldError(errors, "dateOfBirth")}
+          <p class="hint">Used only to work out your year group, which is never stored.</p>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="new-password"${invalidAttr(errors, "password")} />
+          ${fieldError(errors, "password")}
+          <p class="hint">At least 12 characters. Four random words is easier to remember and harder to guess.</p>
+        </div>
+        <div class="field">
+          <label for="confirm">Confirm password</label>
+          <input type="password" id="confirm" name="confirm" required autocomplete="new-password"${invalidAttr(errors, "confirm")} />
+          ${fieldError(errors, "confirm")}
+        </div>
+        <button class="btn" type="submit" style="width:100%;">Create account</button>
+      </form>
+    </div>
+    <p style="text-align:center;font-size:0.9rem;">
+      Already have an account? <a href="/admin/login">Sign in</a>.
+    </p>
+    <p style="text-align:center;font-size:0.78rem;color:var(--muted);">
+      There is no password reset. If you lose your password the account cannot be recovered.
+    </p>
+  </div>
+</div>`;
+  return layout(body, { title: "Create an account", chromeless: true });
+}
+function dashboardPage(options) {
+  const { data, publicUrl } = options;
+  const { profile, book, year } = data;
+  const yearNote = year.status === "at-school" ? `Academic year ${escapeHtml(year.academicYearLabel)}` : "Outside school years";
+  const coverBlock = book ? options.signatureOptions.hasCover ? `<img src="/admin/image/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />` : '<div class="no-cover">No cover<br />stored</div>' : '<div class="no-cover">No book<br />set</div>';
+  const body = `
+<div class="page-head">
+  <h1>Dashboard</h1>
+  <p>Your signature updates itself wherever you have already pasted it, whenever you change your book or profile.</p>
+</div>
+
+<div class="panel" style="padding:0;">
+  <div class="identity">
+    <div class="identity-cell">
+      <div class="identity-label">Who</div>
+      <div class="identity-value">${escapeHtml(profile.name)}</div>
+      <div class="identity-sub">${escapeHtml(profile.house ? `${profile.house} House` : "No house set")}</div>
+    </div>
+    <div class="identity-cell">
+      <div class="identity-label">Year</div>
+      <div class="identity-value">${escapeHtml(year.label)}</div>
+      <div class="identity-sub">${yearNote} \xB7 calculated, not stored</div>
+    </div>
+    <div class="identity-cell">
+      <div class="identity-label">Reading</div>
+      <div class="identity-value">${escapeHtml(book ? book.title : "Nothing set")}</div>
+      <div class="identity-sub">${escapeHtml(book?.author || (book ? "Author unknown" : "Choose a book to begin"))}</div>
+    </div>
+  </div>
+</div>
+
+<div class="grid two">
+  <div class="panel">
+    <h2>Current book</h2>
+    <div class="cover-block">
+      ${coverBlock}
+      <div>
+        ${book ? `<dl class="summary" style="display:block;">
+                 <dd style="font-family:Georgia,serif;font-size:1.05rem;color:var(--navy);font-weight:700;">${escapeHtml(book.title)}</dd>
+                 <dd style="color:var(--muted);margin-top:0.2rem;">${escapeHtml(book.author || "Author unknown")}</dd>
+                 ${book.publicationYear ? `<dd style="color:var(--muted);font-size:0.85rem;margin-top:0.35rem;">Published ${book.publicationYear}</dd>` : ""}
+                 ${book.isbn ? `<dd style="color:var(--muted);font-size:0.85rem;">ISBN ${escapeHtml(book.isbn)}</dd>` : ""}
+               </dl>` : '<p style="color:var(--muted);">No book is set yet. The signature will omit the reading section until you choose one.</p>'}
+        <div class="actions">
+          <a class="btn small" href="/admin/book">${book ? "Change book" : "Choose a book"}</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Signature preview</h2>
+    ${renderSignatureHtml(data, options.signatureOptions)}
+    <div class="actions">
+      <a class="btn small" href="/admin/signature">Get the signature</a>
+      <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Public signature address</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Anyone with this link can view the signature. Nobody can change it without signing in here.
+  </p>
+  <input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" />
+</div>`;
+  return layout(body, {
+    title: "Dashboard",
+    active: "dashboard",
+    username: options.username,
+    notice: options.notice ?? null,
+    error: options.error ?? null
+  });
+}
+function resultItem(result, csrfToken) {
+  const cover = result.coverUrl !== null ? `<img src="/admin/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />` : '<div class="no-cover">NO COVER</div>';
+  const meta = [
+    result.author || "Author unknown",
+    result.publicationYear !== null ? String(result.publicationYear) : null,
+    result.isbn !== null ? `ISBN ${result.isbn}` : null
+  ].filter((part) => part !== null).join("  \xB7  ");
+  return `<li class="result">
+  ${cover}
+  <div class="result-body">
+    <div class="result-title">${escapeHtml(result.title)}</div>
+    <div class="result-meta">${escapeHtml(meta)}</div>
+    <form method="post" action="/admin/book">
+      ${csrfField(csrfToken)}
+      <input type="hidden" name="action" value="select" />
+      <input type="hidden" name="title" value="${escapeHtml(result.title)}" />
+      <input type="hidden" name="author" value="${escapeHtml(result.author)}" />
+      <input type="hidden" name="coverUrl" value="${escapeHtml(result.coverUrl ?? "")}" />
+      <input type="hidden" name="isbn" value="${escapeHtml(result.isbn ?? "")}" />
+      <input type="hidden" name="publicationYear" value="${escapeHtml(
+    result.publicationYear !== null ? String(result.publicationYear) : ""
+  )}" />
+      <input type="hidden" name="source" value="${escapeHtml(result.source)}" />
+      <button class="btn small" type="submit">Make this my current book</button>
+    </form>
+  </div>
+</li>`;
+}
+function bookPage(options) {
+  const { results, warnings, searched, errors, csrfToken } = options;
+  const warningBanners = warnings.map((warning) => `<div class="banner info">${escapeHtml(warning)}</div>`).join("");
+  const resultsBlock = !searched ? "" : results.length === 0 ? `<div class="banner info">
+           No books matched that search. Try a different spelling, search by author,
+           or add the book manually below.
+         </div>` : `<ul class="results">${results.map((result) => resultItem(result, csrfToken)).join("\n")}</ul>`;
+  const body = `
+<div class="page-head">
+  <h1>Change book</h1>
+  <p>Search for what you are reading, or enter it by hand if the search cannot find it.</p>
+</div>
+
+${options.current ? `<div class="banner info">
+         Currently reading <strong>${escapeHtml(options.current.title)}</strong>${options.current.author ? ` by ${escapeHtml(options.current.author)}` : ""}.
+       </div>` : ""}
+
+<div class="panel">
+  <h2>Search</h2>
+  <form method="get" action="/admin/book" role="search">
+    <div class="field">
+      <label for="q">Title, author or ISBN</label>
+      <input type="search" id="q" name="q" value="${escapeHtml(options.query)}"
+             placeholder="e.g. Wolf Hall, or 9780007230204"${invalidAttr(errors, "query")} />
+      ${fieldError(errors, "query")}
+      <p class="hint">Searches Google Books and Open Library together. Results are cached for an hour.</p>
+    </div>
+    <button class="btn" type="submit">Search</button>
+  </form>
+  ${warningBanners}
+  ${resultsBlock}
+</div>
+
+<div class="panel">
+  <h2>Enter manually</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Use this when the search cannot find your book, or when you want to correct its details.
+  </p>
+  <form method="post" action="/admin/book">
+    ${csrfField(csrfToken)}
+    <input type="hidden" name="action" value="manual" />
+    <div class="grid two">
+      <div class="field">
+        <label for="title">Title</label>
+        <input type="text" id="title" name="title" required maxlength="200"${invalidAttr(errors, "title")} />
+        ${fieldError(errors, "title")}
+      </div>
+      <div class="field">
+        <label for="author">Author</label>
+        <input type="text" id="author" name="author" maxlength="160"${invalidAttr(errors, "author")} />
+        ${fieldError(errors, "author")}
+      </div>
+    </div>
+    <div class="grid two">
+      <div class="field">
+        <label for="publicationYear">Publication year</label>
+        <input type="number" id="publicationYear" name="publicationYear" min="1000" max="2100"${invalidAttr(errors, "publicationYear")} />
+        ${fieldError(errors, "publicationYear")}
+      </div>
+      <div class="field">
+        <label for="isbn">ISBN</label>
+        <input type="text" id="isbn" name="isbn" maxlength="20"${invalidAttr(errors, "isbn")} />
+        ${fieldError(errors, "isbn")}
+      </div>
+    </div>
+    <div class="field">
+      <label for="coverUrl">Cover image URL</label>
+      <input type="url" id="coverUrl" name="coverUrl" placeholder="https://..."${invalidAttr(errors, "coverUrl")} />
+      ${fieldError(errors, "coverUrl")}
+      <p class="hint">Optional. The image is downloaded and stored here, so the signature keeps working if the original link stops.</p>
+    </div>
+    <button class="btn" type="submit">Set as current book</button>
+  </form>
+</div>`;
+  return layout(body, {
+    title: "Change book",
+    active: "book",
+    notice: options.notice ?? null,
+    error: options.error ?? null
+  });
+}
+function profilePage(options) {
+  const { profile } = options.data;
+  const { errors, csrfToken } = options;
+  let yearExplanation = "";
+  try {
+    const year = calculateSchoolYear(profile.dateOfBirth);
+    yearExplanation = `Born in the ${year.cohortStart}/${String((year.cohortStart + 1) % 100).padStart(2, "0")} cohort, so in academic year ${year.academicYearLabel} this is <strong>${escapeHtml(year.label)}</strong>.`;
+  } catch {
+    yearExplanation = "The date of birth could not be interpreted.";
+  }
+  const check = (name, label, checked) => `<div class="check">
+       <input type="checkbox" id="${name}" name="${name}"${checked ? " checked" : ""} />
+       <label for="${name}">${escapeHtml(label)}</label>
+     </div>`;
+  const body = `
+<div class="page-head">
+  <h1>Profile</h1>
+  <p>Your year group is calculated from your date of birth and cannot be set by hand.</p>
+</div>
+
+<div class="panel">
+  <h2>Details</h2>
+  <form method="post" action="/admin/profile">
+    ${csrfField(csrfToken)}
+    <div class="grid two">
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" required maxlength="80"
+               value="${escapeHtml(profile.name)}"${invalidAttr(errors, "name")} />
+        ${fieldError(errors, "name")}
+      </div>
+      <div class="field">
+        <label for="dateOfBirth">Date of birth</label>
+        <input type="date" id="dateOfBirth" name="dateOfBirth" required
+               value="${escapeHtml(profile.dateOfBirth)}"${invalidAttr(errors, "dateOfBirth")} />
+        ${fieldError(errors, "dateOfBirth")}
+        <p class="hint">${yearExplanation}</p>
+      </div>
+    </div>
+    <div class="grid two">
+      <div class="field">
+        <label for="house">House</label>
+        <input type="text" id="house" name="house" maxlength="40"
+               value="${escapeHtml(profile.house)}"${invalidAttr(errors, "house")} />
+        ${fieldError(errors, "house")}
+      </div>
+      <div class="field">
+        <label for="school">School</label>
+        <input type="text" id="school" name="school" maxlength="100"
+               value="${escapeHtml(profile.school)}"${invalidAttr(errors, "school")} />
+        ${fieldError(errors, "school")}
+      </div>
+    </div>
+    <div class="field">
+      <label for="subtitle">Subtitle</label>
+      <input type="text" id="subtitle" name="subtitle" maxlength="100"
+             value="${escapeHtml(profile.subtitle)}"${invalidAttr(errors, "subtitle")} />
+      ${fieldError(errors, "subtitle")}
+      <p class="hint">Optional line beneath the school, e.g. a role or a form.</p>
+    </div>
+
+    <fieldset style="border:1px solid var(--rule);border-radius:2px;padding:1rem;margin:0 0 1rem;">
+      <legend style="font-size:0.8rem;font-weight:600;color:var(--navy);padding:0 0.4rem;">Show in signature</legend>
+      <div class="checks">
+        ${check("showYear", "Year group", profile.showYear)}
+        ${check("showHouse", "House", profile.showHouse)}
+        ${check("showSchool", "School", profile.showSchool)}
+        ${check("showSubtitle", "Subtitle", profile.showSubtitle)}
+      </div>
+    </fieldset>
+
+    <button class="btn" type="submit">Save profile</button>
+  </form>
+</div>
+
+<div class="panel" id="logo-cropper">
+  <h2>Signature logo</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    The logo shown in your <strong>email signature</strong>. It defaults to the school crest;
+    upload your own and crop it if you want something different.
+  </p>
+  <p class="hint">
+    The logo in the bar at the top of this site and on the sign-in page is part of the site's
+    design and is not editable here.
+  </p>
+
+  <div class="logo-slot" style="max-width:420px;">
+    <h3>Currently used</h3>
+    <div class="surface">
+      <img src="${options.hasLogo ? `/admin/image/logo?v=${options.data.revision}` : escapeHtml(SITE_LOGO)}" alt="Logo used in the signature" />
+    </div>
+    <p class="hint" style="margin:0;">
+      ${options.hasLogo ? "Your uploaded crop." : "The default school crest."}
+    </p>
+    ${options.hasOriginal ? `<div class="actions" style="margin-top:0.75rem;">
+             <button class="btn secondary small" type="button" id="crop-recrop"
+                     data-src="/admin/image/logo-original?v=${options.data.revision}">Re-crop</button>
+           </div>` : ""}
+  </div>
+
+  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
+    ${csrfField(csrfToken)}
+    <div class="field">
+      <label for="logo-file">Upload a different logo</label>
+      <input type="file" id="logo-file" name="logo"
+             accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, "logo")} />
+      ${fieldError(errors, "logo")}
+      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Transparent PNG works best.</p>
+    </div>
+
+    <button class="btn" type="submit" id="logo-submit">Upload</button>
+
+    <div id="crop-panel" hidden>
+      <div class="field">
+        <label id="crop-heading">Crop for the email signature</label>
+        <div class="crop-stage" id="crop-stage">
+          <img id="crop-image" alt="" />
+          <div class="crop-box" id="crop-box" tabindex="0" role="application"
+               aria-label="Crop area. Arrow keys move it, hold Alt and use arrow keys to resize.">
+            <span class="crop-handle" data-handle="nw"></span>
+            <span class="crop-handle" data-handle="n"></span>
+            <span class="crop-handle" data-handle="ne"></span>
+            <span class="crop-handle" data-handle="e"></span>
+            <span class="crop-handle" data-handle="se"></span>
+            <span class="crop-handle" data-handle="s"></span>
+            <span class="crop-handle" data-handle="sw"></span>
+            <span class="crop-handle" data-handle="w"></span>
+          </div>
+        </div>
+        <p class="hint" id="crop-dims"></p>
+        <p class="hint" id="crop-status" role="status"></p>
+      </div>
+
+      <div class="crop-previews">
+        <div class="crop-preview-pane">
+          <div class="crop-preview-label">As it will appear in the signature</div>
+          <div class="crop-preview-surface on-white">
+            <img id="crop-preview" alt="Preview of the cropped logo" />
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit" id="crop-save">Save crop</button>
+        <button class="btn secondary small" type="button" id="crop-reset">Reset crop</button>
+        <button class="btn secondary small" type="button" id="crop-cancel">Cancel</button>
+      </div>
+    </div>
+  </form>
+
+  ${options.hasLogo ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
+           ${csrfField(csrfToken)}
+           <button class="btn secondary small" type="submit">Revert to the default crest</button>
+         </form>` : ""}
+</div>`;
+  return layout(body, {
+    title: "Profile",
+    active: "profile",
+    username: options.username,
+    scripts: ["/admin/js/cropper.js"],
+    notice: options.notice ?? null,
+    error: options.error ?? null
+  });
+}
+function signatureRenderPayload(options) {
+  const { data } = options;
+  return JSON.stringify({
+    revision: data.revision,
+    name: data.profile.name,
+    credentials: buildCredentialLine(data),
+    school: data.profile.showSchool ? data.profile.school : "",
+    subtitle: data.profile.showSubtitle ? data.profile.subtitle : "",
+    // The public logo route, not the admin one: it falls back to the built-in
+    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
+    // transparent pixel that the canvas would scale into an empty band.
+    logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
+    coverUrl: options.signatureOptions.hasCover ? `/admin/image/cover?v=${data.revision}` : null,
+    book: data.book ? { title: data.book.title, author: data.book.author } : null,
+    colours: {
+      navy: BRAND.navy,
+      rose: BRAND.rose,
+      gold: BRAND.gold,
+      muted: BRAND.muted
+    }
+  });
+}
+function signaturePage(options) {
+  const { data, publicUrl, signatureHtml, imageUrl, imageSize } = options;
+  const altText = [
+    data.profile.name,
+    buildCredentialLine(data),
+    data.profile.showSchool ? data.profile.school : "",
+    data.book ? `Currently reading ${data.book.title}${data.book.author ? ` by ${data.book.author}` : ""}` : ""
+  ].filter((part) => part !== "").join(" \u2014 ");
+  const imageSnippet = `<a href="${escapeHtml(publicUrl)}"><img src="${escapeHtml(imageUrl)}"` + (imageSize ? ` width="${imageSize.width}"` : "") + ` alt="${escapeHtml(altText)}" style="display:block;border:0;outline:none;text-decoration:none;` + (imageSize ? `width:${imageSize.width}px;max-width:100%;height:auto;` : "") + `" /></a>`;
+  const body = `
+<div class="page-head">
+  <h1>Signature</h1>
+  <p>Paste this into your email client once. It keeps itself up to date.</p>
+</div>
+
+<div class="panel" id="signature-image"
+     data-csrf="${escapeHtml(options.csrfToken)}"
+     data-stale="${options.imageStale ? "true" : "false"}"
+     data-signature="${escapeHtml(signatureRenderPayload(options))}">
+  <h2>Your signature</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Everything below \u2014 your name, year, house, school, book and cover \u2014 is drawn into a single
+    image at a fixed address. Change any of it and every signature you have already sent starts
+    showing the new version, with nothing to re-paste.
+  </p>
+
+  <div class="email-chrome">
+    <div class="email-chrome-bar">To: someone@example.com &nbsp;\xB7&nbsp; Subject: Prep</div>
+    <div class="email-chrome-body">
+      <p>Dear Sir,</p>
+      <p>Please find my essay attached.</p>
+      <p>With thanks,</p>
+      <hr class="sep" />
+      <img id="signature-image-preview" data-src="${escapeHtml(imageUrl)}"
+           src="${escapeHtml(imageUrl)}"${imageSize ? ` width="${imageSize.width}"` : ""}
+           alt="${escapeHtml(altText)}"
+           style="display:block;max-width:100%;height:auto;" />
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn secondary small" type="button" id="signature-image-rebuild" hidden>Rebuild image</button>
+    <span id="signature-image-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Copy this into your email signature</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Select everything in the box and copy it, then paste into your email signature editor.
+  </p>
+  <label class="visually-hidden" for="signature-html">Email signature HTML</label>
+  <textarea class="code" id="signature-html" readonly spellcheck="false" style="min-height:120px;">${escapeHtml(imageSnippet)}</textarea>
+  <div class="actions">
+    <button class="btn" type="button" id="copy-button" hidden>Copy HTML</button>
+    <span id="copy-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
+  </div>
+  <p class="hint">
+    In Outlook on Windows it usually pastes better to open the
+    <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">public signature page</a>,
+    select the signature there and copy that instead.
+  </p>
+</div>
+
+<div class="panel">
+  <h2>Stable addresses</h2>
+  <dl class="summary" style="grid-template-columns:8rem 1fr;">
+    <dt>Image</dt>
+    <dd><input type="text" readonly value="${escapeHtml(imageUrl)}" aria-label="Signature image URL" /></dd>
+    <dt>Web page</dt>
+    <dd><input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" /></dd>
+  </dl>
+  <p class="hint">
+    Neither address ever changes. Anyone with them can view your signature; nobody can alter it
+    without signing in here.
+  </p>
+</div>
+
+<div class="panel">
+  <h2>Text version</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    The same signature built from real text rather than an image. It is sharper and can be read
+    by screen readers, but <strong>only the cover updates by itself</strong> \u2014 the words are fixed
+    at the moment you copy them, so you would need to re-copy this after every change. Use it only
+    if an email client refuses the image.
+  </p>
+  <label class="visually-hidden" for="signature-html-text">Text-based email signature HTML</label>
+  <textarea class="code" id="signature-html-text" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
+</div>
+
+<div class="panel">
+  <h2>Before you paste it</h2>
+  <ul style="font-size:0.9rem;color:var(--ink);padding-left:1.2rem;">
+    <li style="margin-bottom:0.5rem;">
+      <strong>Remote images.</strong> The signature loads when the email is opened. Most clients
+      show it straight away for a sender the reader has written to before; some, including Outlook
+      on Windows with default settings, ask them to click \u201CDownload pictures\u201D first. The alt text
+      carries your details in the meantime.
+    </li>
+    <li style="margin-bottom:0.5rem;">
+      <strong>Gmail caches images on its own servers.</strong> A change can take a while to appear
+      for Gmail readers even though the address is unchanged. Everywhere else it updates within
+      about five minutes.
+    </li>
+    <li>
+      <strong>Old emails show your current book.</strong> That is the intended behaviour: the
+      signature is always live rather than a snapshot of the day you sent it.
+    </li>
+  </ul>
+</div>`;
+  return layout(body, {
+    title: "Signature",
+    active: "signature",
+    notice: options.notice ?? null,
+    scripts: ["/admin/js/copy.js", "/admin/js/signature-image.js"]
+  });
+}
+
 // src/worker/validate.ts
 var LIMITS = {
   name: 80,
@@ -2408,6 +2516,10 @@ var LIMITS = {
 function text(form, field) {
   const raw = form.get(field);
   return typeof raw === "string" ? normaliseWhitespace(raw) : "";
+}
+function rawText(form, field) {
+  const value = form.get(field);
+  return typeof value === "string" ? value : "";
 }
 function checkbox(form, field) {
   return form.get(field) !== null;
@@ -2535,6 +2647,79 @@ function detectImageType(bytes) {
   }
   return null;
 }
+var RESERVED_SLUGS = /* @__PURE__ */ new Set([
+  "admin",
+  "api",
+  "assets",
+  "signature",
+  "login",
+  "logout",
+  "register",
+  "signup",
+  "static",
+  "js",
+  "css",
+  "robots",
+  "favicon",
+  "well-known",
+  "new",
+  "account",
+  "settings",
+  "help",
+  "about",
+  "support",
+  "root",
+  "system"
+]);
+function slugify(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+}
+function isReservedSlug(slug) {
+  return RESERVED_SLUGS.has(slug);
+}
+function validateRegistration(form) {
+  const errors = {};
+  const username = text(form, "username");
+  if (username === "") {
+    errors.username = "Choose a username.";
+  } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$/.test(username)) {
+    errors.username = "Use 3 to 32 characters: letters, numbers, full stops, hyphens or underscores.";
+  }
+  const slugSource = text(form, "slug") || username;
+  const slug = slugify(slugSource);
+  if (slug === "") {
+    errors.slug = "Choose a web address made of letters and numbers.";
+  } else if (slug.length < 3) {
+    errors.slug = "The web address must be at least 3 characters.";
+  } else if (isReservedSlug(slug)) {
+    errors.slug = "That web address is reserved. Please choose another.";
+  }
+  const password = rawText(form, "password");
+  if (password.length < 12) {
+    errors.password = "Use at least 12 characters. A few random words works well.";
+  } else if (password.length > 200) {
+    errors.password = "That password is unreasonably long.";
+  }
+  const confirm = rawText(form, "confirm");
+  if (confirm !== password) {
+    errors.confirm = "The two passwords do not match.";
+  }
+  const name = text(form, "name");
+  if (name === "") errors.name = "Enter the name to show in your signature.";
+  else if (name.length > LIMITS.name) errors.name = `Name must be ${LIMITS.name} characters or fewer.`;
+  const dateOfBirth = text(form, "dateOfBirth");
+  if (dateOfBirth === "") {
+    errors.dateOfBirth = "Enter your date of birth so your year group can be worked out.";
+  } else {
+    try {
+      calculateSchoolYear(dateOfBirth);
+    } catch {
+      errors.dateOfBirth = "Enter a valid date of birth.";
+    }
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  return { ok: true, errors: {}, value: { username, slug, password, name, dateOfBirth } };
+}
 
 // src/worker/index.ts
 var THUMBNAIL_HOSTS = /* @__PURE__ */ new Set([
@@ -2543,21 +2728,18 @@ var THUMBNAIL_HOSTS = /* @__PURE__ */ new Set([
   "covers.openlibrary.org"
 ]);
 var NOTICES = {
-  "book-set": "Your current book has been updated. The signature is already showing it.",
+  "book-set": "Your current book has been updated.",
   "profile-saved": "Profile saved.",
   "logo-saved": "Logo uploaded.",
   "logo-removed": "Logo removed.",
-  "signed-out": "You have been signed out."
+  "signed-out": "You have been signed out.",
+  registered: "Welcome. Set your house, school and current book to finish your signature."
 };
 var ERRORS = {
   csrf: "That form had expired. Please try again.",
   "rate-limited": "Too many requests. Please wait a moment and try again.",
   "cover-failed": "The book was saved, but its cover could not be downloaded."
 };
-function formText(form, field) {
-  const value = form.get(field);
-  return typeof value === "string" ? value : "";
-}
 function adminHtml(body) {
   return html(body, { headers: adminSecurityHeaders() });
 }
@@ -2570,10 +2752,14 @@ function scriptResponse(source) {
     }
   });
 }
-function signatureOptionsFor(url, slug, hasLogo, hasCover) {
-  return { origin: url.origin, slug, hasLogo, hasCover };
+function formText(form, field) {
+  const value = form.get(field);
+  return typeof value === "string" ? value : "";
 }
-function imageResponse(image, request, headers) {
+function signatureOptionsFor(url, slug, hasCover) {
+  return { origin: url.origin, slug, hasLogo: true, hasCover };
+}
+function imageResponse(image, request, headers, cacheControl = "public, max-age=31536000, immutable") {
   const etag = `"${image.etag}"`;
   if (request.headers.get("If-None-Match") === etag) {
     return new Response(null, { status: 304, headers: { ETag: etag, ...headers } });
@@ -2582,9 +2768,7 @@ function imageResponse(image, request, headers) {
     headers: {
       "Content-Type": image.contentType,
       ETag: etag,
-      // Safe to cache hard because every URL carries the revision, so a changed
-      // book produces a different URL rather than a stale hit.
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": cacheControl,
       ...headers
     }
   });
@@ -2636,51 +2820,44 @@ var EMPTY_GIF = Uint8Array.from([
 ]);
 function emptyImage(headers) {
   return new Response(EMPTY_GIF, {
-    headers: {
-      "Content-Type": "image/gif",
-      "Cache-Control": "public, max-age=300",
-      ...headers
-    }
+    headers: { "Content-Type": "image/gif", "Cache-Control": "public, max-age=300", ...headers }
   });
 }
 async function handleSignature(request, env, url) {
-  const config = readConfig(env);
   const segments = url.pathname.split("/").filter((part) => part !== "");
   if (segments[0] !== "signature") return null;
   const slugSegment = segments[1] ?? "";
-  const baseSlug = slugSegment.replace(/\.(txt|png)$/, "");
-  if (baseSlug !== config.slug) return null;
-  const asset = segments[2];
-  const headers = publicSecurityHeaders();
-  const PUBLIC_ASSETS = {
-    "logo.png": "logo",
-    "cover.jpg": "cover"
-  };
-  if (slugSegment.endsWith(".png") && baseSlug === config.slug) {
-    const image = await getImage(env, "signature");
-    if (image === null) return emptyImage(headers);
-    const etag = `"${image.etag}"`;
-    if (request.headers.get("If-None-Match") === etag) {
-      return new Response(null, { status: 304, headers: { ETag: etag, ...headers } });
-    }
-    return new Response(image.bytes, {
-      headers: {
-        "Content-Type": image.contentType,
-        ETag: etag,
-        "Cache-Control": "public, max-age=300, must-revalidate",
-        "Cross-Origin-Resource-Policy": "cross-origin",
-        "Access-Control-Allow-Origin": "*",
-        ...headers
-      }
+  const slug = slugSegment.replace(/\.(txt|png)$/, "");
+  if (slug === "") return notFound();
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("The signature is read-only.", {
+      status: 405,
+      headers: { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" }
     });
   }
-  if (asset !== void 0 && asset in PUBLIC_ASSETS) {
+  const user = await getUserBySlug(env, slug);
+  if (user === null) return notFound("No signature found at that address.");
+  const asset = segments[2];
+  const headers = publicSecurityHeaders();
+  const crossOrigin = {
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Access-Control-Allow-Origin": "*"
+  };
+  if (slugSegment.endsWith(".png") && asset === void 0) {
+    const image = await getImage(env, user.id, "signature");
+    if (image === null) return emptyImage({ ...headers, ...crossOrigin });
+    return imageResponse(
+      image,
+      request,
+      { ...headers, ...crossOrigin },
+      "public, max-age=300, must-revalidate"
+    );
+  }
+  const PUBLIC_ASSETS = { "logo.png": "logo", "cover.jpg": "cover" };
+  if (asset !== void 0) {
+    if (!(asset in PUBLIC_ASSETS)) return notFound();
     const key = PUBLIC_ASSETS[asset];
-    const image = await getImage(env, key);
-    const crossOrigin = {
-      "Cross-Origin-Resource-Policy": "cross-origin",
-      "Access-Control-Allow-Origin": "*"
-    };
+    const image = await getImage(env, user.id, key);
     if (image !== null) return imageResponse(image, request, crossOrigin);
     if (key === "logo") {
       const fallback = decodeAsset("berkhamsted-logo.png");
@@ -2694,76 +2871,119 @@ async function handleSignature(request, env, url) {
         });
       }
     }
-    return emptyImage(headers);
+    return emptyImage({ ...headers, ...crossOrigin });
   }
-  if (asset !== void 0) return notFound();
-  const data = await getSignatureData(env);
-  const coverPresent = await hasImage(env, "cover");
-  const options = signatureOptionsFor(url, config.slug, true, coverPresent);
+  const data = await getSignatureData(env, user);
+  if (data === null) return notFound("That signature is not set up yet.");
+  const coverPresent = await hasImage(env, user.id, "cover");
+  const options = signatureOptionsFor(url, user.slug, coverPresent);
   const cacheHeaders = { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" };
   if (slugSegment.endsWith(".txt")) {
     return new Response(renderSignatureText(data), {
       headers: { "Content-Type": "text/plain; charset=utf-8", ...headers, ...cacheHeaders }
     });
   }
-  return html(renderSignatureDocument(data, options), {
-    headers: { ...headers, ...cacheHeaders }
-  });
+  return html(renderSignatureDocument(data, options), { headers: { ...headers, ...cacheHeaders } });
 }
-function loginRedirect() {
-  return redirect("/admin/login");
-}
-async function handleAdmin(request, env, url) {
+async function handleRegister(request, env) {
   const config = readConfig(env);
+  if (request.method === "GET") {
+    if (await getSession(env, request) !== null) return redirect("/admin");
+    return adminHtml(registerPage({ signupRestricted: config.signupRestricted, errors: {} }));
+  }
+  if (request.method !== "POST") return notFound();
+  const identifier = clientKey(request);
+  const limit = await consume(env, "register", identifier, LOGIN_RULE);
+  if (!limit.allowed) {
+    return adminHtml(
+      registerPage({
+        signupRestricted: config.signupRestricted,
+        errors: {},
+        error: `Too many attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`
+      })
+    );
+  }
+  const form = await request.formData();
+  const fail = (errors, message) => adminHtml(
+    registerPage({
+      signupRestricted: config.signupRestricted,
+      errors,
+      error: message ?? "Please correct the highlighted fields.",
+      values: {
+        username: formText(form, "username"),
+        slug: formText(form, "slug"),
+        name: formText(form, "name"),
+        dateOfBirth: formText(form, "dateOfBirth")
+      }
+    })
+  );
+  if (config.signupRestricted && formText(form, "code").trim() !== config.signupCode) {
+    return fail({ code: "That invitation code is not right." });
+  }
+  const validated = validateRegistration(form);
+  if (!validated.ok || validated.value === void 0) return fail(validated.errors);
+  const { username, slug, password, name, dateOfBirth } = validated.value;
+  if (await usernameTaken(env, username)) return fail({ username: "That username is already taken." });
+  if (await slugTaken(env, slug)) return fail({ slug: "That web address is already taken." });
+  const { hash, salt } = await hashPassword(env, password);
+  const userId = await createUser(env, {
+    username,
+    slug,
+    passwordHash: hash,
+    passwordSalt: salt,
+    name,
+    dateOfBirth
+  });
+  if (userId === null) {
+    return fail({ username: "That username or web address was just taken. Please try another." });
+  }
+  const session = await createSession(env, userId);
+  const headers = new Headers({ Location: "/admin?ok=registered" });
+  for (const cookie of sessionCookieHeaders(session)) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status: 303, headers });
+}
+async function handleLogin(request, env, url) {
+  const config = readConfig(env);
+  if (request.method === "GET") {
+    if (await getSession(env, request) !== null) return redirect("/admin");
+    return adminHtml(
+      loginPage({
+        signupRestricted: config.signupRestricted,
+        error: ERRORS[url.searchParams.get("error") ?? ""] ?? null,
+        notice: NOTICES[url.searchParams.get("ok") ?? ""] ?? null
+      })
+    );
+  }
+  if (request.method !== "POST") return notFound();
+  const identifier = clientKey(request);
+  const limit = await consume(env, "login", identifier, LOGIN_RULE);
+  if (!limit.allowed) {
+    return adminHtml(
+      loginPage({
+        signupRestricted: config.signupRestricted,
+        error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`
+      })
+    );
+  }
+  const form = await request.formData();
+  const userId = await authenticate(env, formText(form, "username"), formText(form, "password"));
+  if (userId === null) {
+    return adminHtml(
+      loginPage({
+        signupRestricted: config.signupRestricted,
+        error: "Incorrect username or password."
+      })
+    );
+  }
+  await reset(env, "login", identifier);
+  const session = await createSession(env, userId);
+  const headers = new Headers({ Location: "/admin" });
+  for (const cookie of sessionCookieHeaders(session)) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status: 303, headers });
+}
+async function handleAdmin(request, env, url, session, user) {
   const path = url.pathname;
   const method = request.method;
-  if (path === "/admin/js/cropper.js") return scriptResponse(CROPPER_JS);
-  if (path === "/admin/js/copy.js") return scriptResponse(COPY_JS);
-  if (path === "/admin/js/signature-image.js") return scriptResponse(SIGNATURE_IMAGE_JS);
-  if (path === "/admin/login") {
-    if (method === "GET") {
-      const existing = await getSession(env, request);
-      if (existing !== null) return redirect("/admin");
-      return adminHtml(
-        loginPage({
-          configured: config.configured,
-          error: ERRORS[url.searchParams.get("error") ?? ""] ?? null,
-          notice: NOTICES[url.searchParams.get("ok") ?? ""] ?? null
-        })
-      );
-    }
-    if (method === "POST") {
-      const identifier = clientKey(request);
-      const limit = await consume(env, "login", identifier, LOGIN_RULE);
-      if (!limit.allowed) {
-        return adminHtml(
-          loginPage({
-            configured: config.configured,
-            error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`
-          })
-        );
-      }
-      const form = await request.formData();
-      const username = formText(form, "username");
-      const password = formText(form, "password");
-      if (!await verifyCredentials(env, username, password)) {
-        return adminHtml(
-          loginPage({
-            configured: config.configured,
-            error: config.configured ? "Incorrect username or password." : "This deployment has no administrator configured yet."
-          })
-        );
-      }
-      await reset(env, "login", identifier);
-      const session2 = await createSession(env);
-      const headers = new Headers({ Location: "/admin" });
-      for (const cookie of sessionCookieHeaders(session2)) headers.append("Set-Cookie", cookie);
-      return new Response(null, { status: 303, headers });
-    }
-    return notFound();
-  }
-  const session = await getSession(env, request);
-  if (session === null) return loginRedirect();
   const csrfToken = readCookie(request, CSRF_COOKIE) ?? "";
   if (path === "/admin/logout" && method === "POST") {
     await destroySession(env, session.token);
@@ -2779,80 +2999,97 @@ async function handleAdmin(request, env, url) {
   };
   const notice = NOTICES[url.searchParams.get("ok") ?? ""] ?? null;
   const error = ERRORS[url.searchParams.get("error") ?? ""] ?? null;
-  const buildContext = async () => {
-    const data = await getSignatureData(env);
-    const [logoPresent, coverPresent, originalPresent] = await Promise.all([
-      hasImage(env, "logo"),
-      hasImage(env, "cover"),
-      hasImage(env, "logo-original")
+  const context = async () => {
+    const data = await getSignatureData(env, user);
+    if (data === null) throw new Error(`Profile missing for user ${user.id}`);
+    const [coverPresent, logoPresent, originalPresent] = await Promise.all([
+      hasImage(env, user.id, "cover"),
+      hasImage(env, user.id, "logo"),
+      hasImage(env, user.id, "logo-original")
     ]);
-    const options = signatureOptionsFor(url, config.slug, true, coverPresent);
     return {
       data,
-      options,
-      publicUrl: `${url.origin}/signature/${config.slug}`,
+      options: signatureOptionsFor(url, user.slug, coverPresent),
+      publicUrl: `${url.origin}/signature/${user.slug}`,
+      imageUrl: `${url.origin}/signature/${user.slug}.png`,
       logoPresent,
       originalPresent
     };
   };
   if (path === "/admin" && method === "GET") {
-    const { data, options, publicUrl } = await buildContext();
+    const c = await context();
     return adminHtml(
-      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error })
+      dashboardPage({
+        data: c.data,
+        signatureOptions: c.options,
+        publicUrl: c.publicUrl,
+        username: user.username,
+        notice,
+        error
+      })
     );
   }
   if (path === "/admin/signature" && method === "GET") {
-    const { data, options, publicUrl } = await buildContext();
-    const [imageRevision, imageSize] = await Promise.all([
-      getSignatureImageRevision(env),
-      getSignatureImageSize(env)
-    ]);
+    const c = await context();
     return adminHtml(
       signaturePage({
-        data,
-        signatureOptions: options,
-        publicUrl,
-        signatureHtml: renderSignatureHtml(data, options),
-        notice,
+        data: c.data,
+        signatureOptions: c.options,
+        publicUrl: c.publicUrl,
+        signatureHtml: renderSignatureHtml(c.data, c.options),
         csrfToken,
-        imageUrl: `${url.origin}/signature/${config.slug}.png`,
-        imageSize,
-        // Stale whenever the stored image predates the current details, which
-        // is what triggers the dashboard to redraw and re-upload it.
-        imageStale: imageRevision !== data.revision
+        imageUrl: c.imageUrl,
+        imageSize: user.imageWidth !== null && user.imageHeight !== null ? { width: user.imageWidth, height: user.imageHeight } : null,
+        imageStale: user.imageRevision !== c.data.revision,
+        notice
       })
     );
+  }
+  if (path === "/admin/signature/image" && method === "POST") {
+    const form = await request.formData();
+    const blocked = await guardMutation(form);
+    if (blocked !== null) return blocked;
+    const validated = await validateImageUpload(form.get("image"));
+    if (!validated.ok || validated.value === void 0) {
+      return json({ error: "The rendered image was not accepted." }, { status: 400 });
+    }
+    const width = Number.parseInt(formText(form, "width"), 10);
+    const height = Number.parseInt(formText(form, "height"), 10);
+    const revision = Number.parseInt(formText(form, "revision"), 10);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+      return json({ error: "Missing image dimensions." }, { status: 400 });
+    }
+    await putImage(
+      env,
+      user.id,
+      "signature",
+      validated.value.contentType,
+      validated.value.bytes,
+      await sha256Hex(`sig:${user.id}:${validated.value.bytes.byteLength}:${Date.now()}`)
+    );
+    await setSignatureImageState(env, user.id, Number.isFinite(revision) ? revision : 0, width, height);
+    return json({ ok: true });
   }
   if (path === "/admin/book") {
     if (method === "GET") {
       const rawQuery = url.searchParams.get("q");
-      const current = await getCurrentBook(env);
+      const current = await getCurrentBook(env, user.id);
+      const base = { csrfToken, current, notice, error };
       if (rawQuery === null) {
         return adminHtml(
-          bookPage({
-            csrfToken,
-            query: "",
-            results: [],
-            warnings: [],
-            searched: false,
-            errors: {},
-            notice,
-            error,
-            current
-          })
+          bookPage({ ...base, query: "", results: [], warnings: [], searched: false, errors: {} })
         );
       }
       const validated = validateSearchQuery(rawQuery);
       if (!validated.ok) {
         return adminHtml(
           bookPage({
-            csrfToken,
+            ...base,
             query: rawQuery,
             results: [],
             warnings: [],
             searched: false,
-            errors: validated.errors,
-            current
+            errors: validated.errors
           })
         );
       }
@@ -2860,28 +3097,24 @@ async function handleAdmin(request, env, url) {
       if (!limit.allowed) {
         return adminHtml(
           bookPage({
-            csrfToken,
+            ...base,
             query: rawQuery,
             results: [],
             warnings: [],
             searched: false,
-            errors: { query: "Too many searches. Please wait a moment." },
-            current
+            errors: { query: "Too many searches. Please wait a moment." }
           })
         );
       }
       const outcome = await searchBooks(env, validated.value ?? "");
       return adminHtml(
         bookPage({
-          csrfToken,
+          ...base,
           query: validated.value ?? "",
           results: outcome.results,
           warnings: outcome.warnings,
           searched: true,
-          errors: {},
-          notice,
-          error,
-          current
+          errors: {}
         })
       );
     }
@@ -2900,96 +3133,67 @@ async function handleAdmin(request, env, url) {
             searched: false,
             errors: validated.errors,
             error: "Please correct the highlighted fields.",
-            current: await getCurrentBook(env)
+            current: await getCurrentBook(env, user.id)
           })
         );
       }
-      await setCurrentBook(env, validated.value);
+      await setCurrentBook(env, user.id, validated.value);
       let coverFailed = false;
       if (validated.value.coverUrl !== null) {
         const cover = await fetchCover(validated.value.coverUrl);
         if (cover === null) {
           coverFailed = true;
-          await deleteImage(env, "cover");
+          await deleteImage(env, user.id, "cover");
         } else {
           await putImage(
             env,
+            user.id,
             "cover",
             cover.contentType,
             cover.bytes,
-            await sha256Hex(`${validated.value.title}:${cover.bytes.byteLength}:${Date.now()}`)
+            await sha256Hex(`cover:${user.id}:${cover.bytes.byteLength}:${Date.now()}`)
           );
         }
       } else {
-        await deleteImage(env, "cover");
+        await deleteImage(env, user.id, "cover");
       }
-      await bumpRevision(env);
-      return redirect(coverFailed ? "/admin?error=cover-failed" : "/admin?ok=book-set");
+      await bumpRevision(env, user.id);
+      return redirect(
+        coverFailed ? "/admin/signature?error=cover-failed" : "/admin/signature?ok=book-set"
+      );
     }
     return notFound();
   }
   if (path === "/admin/profile") {
-    if (method === "GET") {
-      const context = await buildContext();
+    const renderProfile = async (errors, message) => {
+      const c = await context();
       return adminHtml(
         profilePage({
           csrfToken,
-          data: context.data,
-          hasLogo: context.logoPresent,
-          hasOriginal: context.originalPresent,
-          errors: {},
-          notice,
-          error
+          data: c.data,
+          hasLogo: c.logoPresent,
+          hasOriginal: c.originalPresent,
+          username: user.username,
+          publicUrl: c.publicUrl,
+          errors,
+          notice: message === void 0 ? notice : null,
+          error: message ?? error
         })
       );
-    }
+    };
+    if (method === "GET") return renderProfile({});
     if (method === "POST") {
       const form = await request.formData();
       const blocked = await guardMutation(form);
       if (blocked !== null) return blocked;
       const validated = validateProfile(form);
       if (!validated.ok || validated.value === void 0) {
-        const context = await buildContext();
-        return adminHtml(
-          profilePage({
-            csrfToken,
-            data: context.data,
-            hasLogo: context.logoPresent,
-            hasOriginal: context.originalPresent,
-            errors: validated.errors,
-            error: "Please correct the highlighted fields."
-          })
-        );
+        return renderProfile(validated.errors, "Please correct the highlighted fields.");
       }
-      await updateProfile(env, validated.value);
+      await updateProfile(env, user.id, validated.value);
       return redirect("/admin/profile?ok=profile-saved");
     }
     return notFound();
-  }
-  if (path === "/admin/signature/image" && method === "POST") {
-    const form = await request.formData();
-    const blocked = await guardMutation(form);
-    if (blocked !== null) return blocked;
-    const validated = await validateImageUpload(form.get("image"));
-    if (!validated.ok || validated.value === void 0) {
-      return json({ error: "The rendered image was not accepted." }, { status: 400 });
-    }
-    const width = Number.parseInt(formText(form, "width"), 10);
-    const height = Number.parseInt(formText(form, "height"), 10);
-    const revision = Number.parseInt(formText(form, "revision"), 10);
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
-      return json({ error: "Missing image dimensions." }, { status: 400 });
-    }
-    await putImage(
-      env,
-      "signature",
-      validated.value.contentType,
-      validated.value.bytes,
-      await sha256Hex(`signature:${validated.value.bytes.byteLength}:${Date.now()}`)
-    );
-    await setSignatureImageSize(env, { width, height });
-    await setSignatureImageRevision(env, Number.isFinite(revision) ? revision : 0);
-    return json({ ok: true });
   }
   if (path === "/admin/logo" && method === "POST") {
     const form = await request.formData();
@@ -2997,13 +3201,15 @@ async function handleAdmin(request, env, url) {
     if (blocked !== null) return blocked;
     const validated = await validateImageUpload(form.get("logo"));
     if (!validated.ok || validated.value === void 0) {
-      const context = await buildContext();
+      const c = await context();
       return adminHtml(
         profilePage({
           csrfToken,
-          data: context.data,
-          hasLogo: context.logoPresent,
-          hasOriginal: context.originalPresent,
+          data: c.data,
+          hasLogo: c.logoPresent,
+          hasOriginal: c.originalPresent,
+          username: user.username,
+          publicUrl: c.publicUrl,
           errors: validated.errors,
           error: "The logo could not be uploaded."
         })
@@ -3011,10 +3217,11 @@ async function handleAdmin(request, env, url) {
     }
     await putImage(
       env,
+      user.id,
       "logo",
       validated.value.contentType,
       validated.value.bytes,
-      await sha256Hex(`logo:${validated.value.bytes.byteLength}:${Date.now()}`)
+      await sha256Hex(`logo:${user.id}:${validated.value.bytes.byteLength}:${Date.now()}`)
     );
     const originalField = form.get("logoOriginal");
     if (originalField instanceof File && originalField.size > 0) {
@@ -3022,40 +3229,46 @@ async function handleAdmin(request, env, url) {
       if (original.ok && original.value !== void 0) {
         await putImage(
           env,
+          user.id,
           "logo-original",
           original.value.contentType,
           original.value.bytes,
-          await sha256Hex(`original:${original.value.bytes.byteLength}:${Date.now()}`)
+          await sha256Hex(`orig:${user.id}:${original.value.bytes.byteLength}:${Date.now()}`)
         );
       }
-    } else if (!await hasImage(env, "logo-original")) {
+    } else if (!await hasImage(env, user.id, "logo-original")) {
       await putImage(
         env,
+        user.id,
         "logo-original",
         validated.value.contentType,
         validated.value.bytes,
-        await sha256Hex(`original:${validated.value.bytes.byteLength}:${Date.now()}`)
+        await sha256Hex(`orig:${user.id}:${validated.value.bytes.byteLength}:${Date.now()}`)
       );
     }
-    await bumpRevision(env);
+    await bumpRevision(env, user.id);
     return redirect("/admin/profile?ok=logo-saved");
   }
   if (path === "/admin/logo/delete" && method === "POST") {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
-    await Promise.all([deleteImage(env, "logo"), deleteImage(env, "logo-original")]);
-    await bumpRevision(env);
+    await Promise.all([
+      deleteImage(env, user.id, "logo"),
+      deleteImage(env, user.id, "logo-original")
+    ]);
+    await bumpRevision(env, user.id);
     return redirect("/admin/profile?ok=logo-removed");
   }
   const ADMIN_IMAGES = {
     "/admin/image/cover": "cover",
     "/admin/image/logo": "logo",
-    "/admin/image/logo-original": "logo-original"
+    "/admin/image/logo-original": "logo-original",
+    "/admin/image/signature": "signature"
   };
   if (path in ADMIN_IMAGES) {
     const key = ADMIN_IMAGES[path];
-    const image = await getImage(env, key);
+    const image = await getImage(env, user.id, key);
     const headers = { "Cross-Origin-Resource-Policy": "same-origin" };
     return image === null ? emptyImage(headers) : imageResponse(image, request, headers);
   }
@@ -3067,9 +3280,7 @@ async function handleAdmin(request, env, url) {
     } catch {
       return notFound();
     }
-    if (parsed.protocol !== "https:" || !THUMBNAIL_HOSTS.has(parsed.hostname)) {
-      return notFound();
-    }
+    if (parsed.protocol !== "https:" || !THUMBNAIL_HOSTS.has(parsed.hostname)) return notFound();
     const upstream = await fetchCover(parsed.toString());
     if (upstream === null) return emptyImage({});
     return new Response(upstream.bytes, {
@@ -3088,31 +3299,41 @@ var index_default = {
     try {
       const signature = await handleSignature(request, env, url);
       if (signature !== null) return signature;
-      if (url.pathname === "/") {
-        return redirect("/admin");
-      }
-      if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-        ctx.waitUntil(purgeExpired(env));
-        return await handleAdmin(request, env, url);
-      }
       if (url.pathname.startsWith("/assets/")) {
-        const name = url.pathname.slice("/assets/".length);
-        const bytes = decodeAsset(name);
+        const bytes = decodeAsset(url.pathname.slice("/assets/".length));
         if (bytes === null) return notFound();
         return new Response(bytes, {
           headers: {
             "Content-Type": "image/png",
-            // Immutable per deploy: changing an asset changes the bundle.
             "Cache-Control": "public, max-age=86400",
             "Cross-Origin-Resource-Policy": "cross-origin",
             "X-Content-Type-Options": "nosniff"
           }
         });
       }
+      if (url.pathname === "/admin/js/cropper.js") return scriptResponse(CROPPER_JS);
+      if (url.pathname === "/admin/js/copy.js") return scriptResponse(COPY_JS);
+      if (url.pathname === "/admin/js/signature-image.js") return scriptResponse(SIGNATURE_IMAGE_JS);
       if (url.pathname === "/robots.txt") {
         return new Response("User-agent: *\nDisallow: /\n", {
           headers: { "Content-Type": "text/plain; charset=utf-8" }
         });
+      }
+      if (url.pathname === "/") return redirect("/admin");
+      if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+        ctx.waitUntil(purgeExpired(env));
+        if (url.pathname === "/admin/register") return await handleRegister(request, env);
+        if (url.pathname === "/admin/login") return await handleLogin(request, env, url);
+        const session = await getSession(env, request);
+        if (session === null) return redirect("/admin/login");
+        const user = await getUserById(env, session.userId);
+        if (user === null) {
+          await destroySession(env, session.token);
+          const headers = new Headers({ Location: "/admin/login" });
+          for (const cookie of clearedCookieHeaders()) headers.append("Set-Cookie", cookie);
+          return new Response(null, { status: 303, headers });
+        }
+        return await handleAdmin(request, env, url, session, user);
       }
       return notFound();
     } catch (error) {

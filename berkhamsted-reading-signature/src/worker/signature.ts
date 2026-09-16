@@ -21,9 +21,9 @@ import type { SignatureData } from '../shared/types';
 
 /** Palette taken from the supplied logo and the specified brand navy. */
 export const BRAND = {
-  navy: '#0A2142',
-  gold: '#EFC486',
-  rose: '#C1272D',
+  navy: '#0A2342',
+  gold: '#DCB180',
+  rose: '#CC3845',
   /** Very light neutral for placeholder fills. The page itself is white. */
   wash: '#F6F7F9',
   ink: '#1F2937',

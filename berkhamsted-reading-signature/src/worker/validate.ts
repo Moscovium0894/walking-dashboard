@@ -33,6 +33,17 @@ function text(form: FormData, field: string): string {
   return typeof raw === 'string' ? normaliseWhitespace(raw) : '';
 }
 
+/**
+ * Read a field verbatim, without whitespace collapsing.
+ *
+ * Passwords must not be normalised: leading, trailing and repeated spaces are
+ * legitimate characters in a passphrase.
+ */
+function rawText(form: FormData, field: string): string {
+  const value = form.get(field);
+  return typeof value === 'string' ? value : '';
+}
+
 function checkbox(form: FormData, field: string): boolean {
   return form.get(field) !== null;
 }
@@ -227,4 +238,95 @@ export function detectImageType(bytes: Uint8Array): string | null {
 
 export function isAllowedImageType(contentType: string): boolean {
   return (ALLOWED_IMAGE_TYPES as readonly string[]).includes(contentType);
+}
+
+
+// --- Registration --------------------------------------------------------
+
+export interface RegistrationInput {
+  username: string;
+  slug: string;
+  password: string;
+  name: string;
+  dateOfBirth: string;
+}
+
+/** Path segments that must never become a person's signature address. */
+const RESERVED_SLUGS = new Set([
+  'admin', 'api', 'assets', 'signature', 'login', 'logout', 'register',
+  'signup', 'static', 'js', 'css', 'robots', 'favicon', 'well-known', 'new',
+  'account', 'settings', 'help', 'about', 'support', 'root', 'system',
+]);
+
+/** Turn a username into a candidate URL slug. */
+export function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+}
+
+export function isReservedSlug(slug: string): boolean {
+  return RESERVED_SLUGS.has(slug);
+}
+
+/**
+ * Validate a registration form.
+ *
+ * Password length is the only strength rule. Composition rules (a digit, a
+ * symbol) push people towards predictable substitutions without adding much
+ * entropy, whereas length reliably does, and logins are rate limited anyway.
+ */
+export function validateRegistration(form: FormData): ValidationResult<RegistrationInput> {
+  const errors: Record<string, string> = {};
+
+  const username = text(form, 'username');
+  if (username === '') {
+    errors.username = 'Choose a username.';
+  } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$/.test(username)) {
+    errors.username =
+      'Use 3 to 32 characters: letters, numbers, full stops, hyphens or underscores.';
+  }
+
+  const slugSource = text(form, 'slug') || username;
+  const slug = slugify(slugSource);
+  if (slug === '') {
+    errors.slug = 'Choose a web address made of letters and numbers.';
+  } else if (slug.length < 3) {
+    errors.slug = 'The web address must be at least 3 characters.';
+  } else if (isReservedSlug(slug)) {
+    errors.slug = 'That web address is reserved. Please choose another.';
+  }
+
+  const password = rawText(form, 'password');
+  if (password.length < 12) {
+    errors.password = 'Use at least 12 characters. A few random words works well.';
+  } else if (password.length > 200) {
+    errors.password = 'That password is unreasonably long.';
+  }
+
+  const confirm = rawText(form, 'confirm');
+  if (confirm !== password) {
+    errors.confirm = 'The two passwords do not match.';
+  }
+
+  const name = text(form, 'name');
+  if (name === '') errors.name = 'Enter the name to show in your signature.';
+  else if (name.length > LIMITS.name) errors.name = `Name must be ${LIMITS.name} characters or fewer.`;
+
+  const dateOfBirth = text(form, 'dateOfBirth');
+  if (dateOfBirth === '') {
+    errors.dateOfBirth = 'Enter your date of birth so your year group can be worked out.';
+  } else {
+    try {
+      calculateSchoolYear(dateOfBirth);
+    } catch {
+      errors.dateOfBirth = 'Enter a valid date of birth.';
+    }
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  return { ok: true, errors: {}, value: { username, slug, password, name, dateOfBirth } };
 }

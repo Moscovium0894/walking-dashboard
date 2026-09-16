@@ -26,6 +26,8 @@ export interface LayoutOptions {
   chromeless?: boolean;
   /** Client scripts to load, e.g. ['/admin/js/cropper.js']. */
   scripts?: string[];
+  /** Signed-in username, shown beside the sign-out button. */
+  username?: string | null;
 }
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; href: string; label: string }> = [
@@ -102,7 +104,13 @@ a { color: var(--navy); }
   text-decoration: none; font-weight: 700;
 }
 .wordmark span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--gold); font-weight: 400; margin-top: 2px; }
-.masthead form { margin: 0; position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%); }
+.masthead-account {
+  position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 0.75rem;
+}
+.masthead-account form { margin: 0; }
+.masthead-user { color: rgba(255,255,255,0.8); font-size: 0.82rem; }
+@media (max-width: 700px) { .masthead-user { display: none; } }
 @media (max-width: 560px) {
   .masthead-inner { justify-content: flex-start; padding-right: 6.5rem; }
   .masthead-logo { height: 34px; }
@@ -333,9 +341,16 @@ export function layout(body: string, options: LayoutOptions): string {
     : `<header class="masthead">
     <div class="masthead-inner">
       ${brandMark()}
-      <form method="post" action="/admin/logout">
-        <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
-      </form>
+      <div class="masthead-account">
+        ${
+          options.username
+            ? `<span class="masthead-user">${escapeHtml(options.username)}</span>`
+            : ''
+        }
+        <form method="post" action="/admin/logout">
+          <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
+        </form>
+      </div>
     </div>
   </header>`;
 

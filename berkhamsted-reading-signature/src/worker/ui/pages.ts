@@ -37,24 +37,17 @@ function invalidAttr(errors: Record<string, string>, name: string): string {
 export interface LoginPageOptions {
   error?: string | null;
   notice?: string | null;
-  configured: boolean;
+  /** True when registration needs an invitation code. */
+  signupRestricted: boolean;
 }
 
 export function loginPage(options: LoginPageOptions): string {
-  const setupWarning = options.configured
-    ? ''
-    : `<div class="banner info">
-         <strong>Not configured yet.</strong> Set <code>ADMIN_USERNAME</code>,
-         <code>ADMIN_PASSWORD</code> and <code>SESSION_SECRET</code> as secrets on this
-         Worker in the Cloudflare dashboard, then reload this page.
-       </div>`;
 
   const body = `<div class="login-wrap">
   <div class="login-card">
     <div class="login-crest">
       <img src="${SITE_LOGO}" alt="Berkhamsted School" />
     </div>
-    ${setupWarning}
     ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ''}
     ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ''}
     <div class="panel">
@@ -71,13 +64,104 @@ export function loginPage(options: LoginPageOptions): string {
         <button class="btn" type="submit" style="width:100%;">Sign in</button>
       </form>
     </div>
-    <p style="text-align:center;font-size:0.8rem;color:var(--muted);">
-      This is a private administration area. There is no public registration.
+    <p style="text-align:center;font-size:0.9rem;">
+      No account yet? <a href="/admin/register">Create one</a>${
+        options.signupRestricted ? ' — you will need an invitation code.' : '.'
+      }
     </p>
   </div>
 </div>`;
 
   return layout(body, { title: 'Sign in', chromeless: true });
+}
+
+
+// --- Register ------------------------------------------------------------
+
+export interface RegisterPageOptions {
+  errors: Record<string, string>;
+  error?: string | null;
+  signupRestricted: boolean;
+  values?: { username?: string; slug?: string; name?: string; dateOfBirth?: string };
+}
+
+export function registerPage(options: RegisterPageOptions): string {
+  const v = options.values ?? {};
+  const { errors } = options;
+
+  const body = `<div class="login-wrap">
+  <div class="login-card" style="max-width:480px;">
+    <div class="login-crest">
+      <img src="${SITE_LOGO}" alt="Berkhamsted School" />
+    </div>
+    ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ''}
+    <div class="panel">
+      <h2>Create an account</h2>
+      <p style="color:var(--muted);font-size:0.9rem;">
+        Your signature is yours alone. Nobody else can change it, and you cannot change anyone
+        else's.
+      </p>
+      <form method="post" action="/admin/register">
+        ${
+          options.signupRestricted
+            ? `<div class="field">
+                 <label for="code">Invitation code</label>
+                 <input type="text" id="code" name="code" required${invalidAttr(errors, 'code')} />
+                 ${fieldError(errors, 'code')}
+               </div>`
+            : ''
+        }
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" required autocomplete="username"
+                 value="${escapeHtml(v.username ?? '')}"${invalidAttr(errors, 'username')} />
+          ${fieldError(errors, 'username')}
+          <p class="hint">What you sign in with. Letters, numbers, full stops, hyphens, underscores.</p>
+        </div>
+        <div class="field">
+          <label for="slug">Signature web address</label>
+          <input type="text" id="slug" name="slug" placeholder="leave blank to use your username"
+                 value="${escapeHtml(v.slug ?? '')}"${invalidAttr(errors, 'slug')} />
+          ${fieldError(errors, 'slug')}
+          <p class="hint">Your signature will live at <code>/signature/&lt;this&gt;</code>. It is public.</p>
+        </div>
+        <div class="field">
+          <label for="name">Name to show in the signature</label>
+          <input type="text" id="name" name="name" required maxlength="80"
+                 value="${escapeHtml(v.name ?? '')}"${invalidAttr(errors, 'name')} />
+          ${fieldError(errors, 'name')}
+        </div>
+        <div class="field">
+          <label for="dateOfBirth">Date of birth</label>
+          <input type="date" id="dateOfBirth" name="dateOfBirth" required
+                 value="${escapeHtml(v.dateOfBirth ?? '')}"${invalidAttr(errors, 'dateOfBirth')} />
+          ${fieldError(errors, 'dateOfBirth')}
+          <p class="hint">Used only to work out your year group, which is never stored.</p>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="new-password"${invalidAttr(errors, 'password')} />
+          ${fieldError(errors, 'password')}
+          <p class="hint">At least 12 characters. Four random words is easier to remember and harder to guess.</p>
+        </div>
+        <div class="field">
+          <label for="confirm">Confirm password</label>
+          <input type="password" id="confirm" name="confirm" required autocomplete="new-password"${invalidAttr(errors, 'confirm')} />
+          ${fieldError(errors, 'confirm')}
+        </div>
+        <button class="btn" type="submit" style="width:100%;">Create account</button>
+      </form>
+    </div>
+    <p style="text-align:center;font-size:0.9rem;">
+      Already have an account? <a href="/admin/login">Sign in</a>.
+    </p>
+    <p style="text-align:center;font-size:0.78rem;color:var(--muted);">
+      There is no password reset. If you lose your password the account cannot be recovered.
+    </p>
+  </div>
+</div>`;
+
+  return layout(body, { title: 'Create an account', chromeless: true });
 }
 
 // --- Dashboard -----------------------------------------------------------
@@ -86,6 +170,7 @@ export interface DashboardPageOptions extends ChromeOptions {
   data: SignatureData;
   signatureOptions: SignatureOptions;
   publicUrl: string;
+  username: string;
   notice?: string | null;
   error?: string | null;
 }
@@ -175,6 +260,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
   return layout(body, {
     title: 'Dashboard',
     active: 'dashboard',
+    username: options.username,
     notice: options.notice ?? null,
     error: options.error ?? null,
   });
@@ -337,6 +423,8 @@ ${
 export interface ProfilePageOptions extends ChromeOptions {
   csrfToken: string;
   data: SignatureData;
+  username: string;
+  publicUrl: string;
   /** Whether a custom signature logo has been uploaded. */
   hasLogo: boolean;
   /** Whether the untouched upload is still held, so the crop can be redone. */
@@ -523,6 +611,7 @@ export function profilePage(options: ProfilePageOptions): string {
   return layout(body, {
     title: 'Profile',
     active: 'profile',
+    username: options.username,
     scripts: ['/admin/js/cropper.js'],
     notice: options.notice ?? null,
     error: options.error ?? null,

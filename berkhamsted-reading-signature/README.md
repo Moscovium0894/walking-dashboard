@@ -1,7 +1,10 @@
 # Berkhamsted Reading Signature
 
-A private admin site that keeps track of the book you are currently reading, and
-serves a matching email signature from a stable public address.
+A site where anyone can create an account, record the book they are currently
+reading, and get an email signature that keeps itself up to date.
+
+Each account owns its own signature and can only ever change its own. There is
+no administrator and no shared state.
 
 Change your book here, and every email signature you have already installed
 starts showing the new one. You never rebuild the signature by hand.
@@ -204,25 +207,27 @@ Put it in [`wrangler.jsonc`](wrangler.jsonc), replacing
 
 ## 6. Secrets
 
-Three secrets are required. Set them on the Worker in the Cloudflare dashboard:
-**Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, with
-type **Secret**.
+**None are required.** The application runs with the D1 binding alone.
 
-| Name | What it is | How to choose it |
-|---|---|---|
-| `ADMIN_USERNAME` | your login username | anything |
-| `ADMIN_PASSWORD` | your login password | 20+ characters from a password manager |
-| `SESSION_SECRET` | key used to salt password derivation | 48+ random characters |
+Passwords are hashed with PBKDF2 and a per-account random salt held in the
+database, which is ordinary practice. Sessions are random tokens stored as
+hashes, so they need no signing key either.
 
-Until all three are set, the login page says so plainly and refuses every
-sign-in attempt. The public signature still works.
+Two optional secrets are available, set under **Settings → Variables and
+Secrets** with type **Secret**:
+
+| Name | Effect |
+|---|---|
+| `SIGNUP_CODE` | When set, registration requires this code. Turns an open site into an invite-only one. |
+| `PASSWORD_PEPPER` | Mixed into every password hash. Because it lives outside the database, a leaked database alone cannot be attacked offline. |
+
+`PASSWORD_PEPPER` invalidates every existing password when set or changed, so
+choose it before anyone registers, or not at all.
 
 No book-API key is needed. Google Books and Open Library volume search are both
 unauthenticated, and all calls happen server-side regardless.
 
-**Never commit any of these.** This repository is public.
-
----
+**Never commit either of these.** This repository is public.
 
 ## 7. Deployment
 

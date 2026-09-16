@@ -1,53 +1,44 @@
-/** Bindings and configuration available to the Worker. */
+/**
+ * Bindings and configuration.
+ *
+ * The application runs with no secrets set at all. Passwords are hashed with a
+ * per-user random salt held in the database, which is standard practice; the
+ * optional PASSWORD_PEPPER below is defence in depth on top of that, not a
+ * requirement.
+ */
 export interface Env {
-  /** D1 database binding. */
+  /** D1 database binding. The only binding the application needs. */
   DB: D1Database;
 
-  /** Path segment for the public signature: /signature/<slug>. */
-  SIGNATURE_SLUG?: string;
+  /**
+   * Optional extra secret mixed into every password hash.
+   *
+   * Because it lives outside the database, setting it means a leaked database
+   * alone cannot be attacked offline. Setting or changing it invalidates every
+   * existing password, so it is best chosen before anyone registers.
+   */
+  PASSWORD_PEPPER?: string;
 
-  // --- Secrets. Set in the Cloudflare dashboard, never in source. ---
-
-  /** Administrator username. */
-  ADMIN_USERNAME?: string;
-  /** Administrator password, compared against after key derivation. */
-  ADMIN_PASSWORD?: string;
-  /** Random key used to sign session cookies. */
-  SESSION_SECRET?: string;
+  /**
+   * Optional. When set, registration requires this code, turning an open site
+   * into an invite-only one without a code change.
+   */
+  SIGNUP_CODE?: string;
 }
 
-/** Configuration resolved from the environment, with defaults applied. */
 export interface Config {
-  slug: string;
-  adminUsername: string;
-  adminPassword: string;
-  sessionSecret: string;
-  /** True when every secret needed to log in is present. */
-  configured: boolean;
+  /** Empty when unset, which is supported. */
+  pepper: string;
+  signupCode: string;
+  /** True when registration requires an invitation code. */
+  signupRestricted: boolean;
 }
 
-const DEFAULT_SLUG = 'otto';
-
-/**
- * Read configuration from the environment.
- *
- * Deliberately does not throw when secrets are missing. A half-configured
- * deployment should still serve the public signature and show a clear setup
- * message on the login page, rather than returning an opaque 500.
- */
 export function readConfig(env: Env): Config {
-  const adminUsername = (env.ADMIN_USERNAME ?? '').trim();
-  const adminPassword = env.ADMIN_PASSWORD ?? '';
-  const sessionSecret = env.SESSION_SECRET ?? '';
-
-  const slugCandidate = (env.SIGNATURE_SLUG ?? '').trim().toLowerCase();
-  const slug = /^[a-z0-9-]{1,40}$/.test(slugCandidate) ? slugCandidate : DEFAULT_SLUG;
-
+  const signupCode = (env.SIGNUP_CODE ?? '').trim();
   return {
-    slug,
-    adminUsername,
-    adminPassword,
-    sessionSecret,
-    configured: adminUsername !== '' && adminPassword !== '' && sessionSecret !== '',
+    pepper: env.PASSWORD_PEPPER ?? '',
+    signupCode,
+    signupRestricted: signupCode !== '',
   };
 }
