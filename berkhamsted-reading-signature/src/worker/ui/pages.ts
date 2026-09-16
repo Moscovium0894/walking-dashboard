@@ -10,7 +10,7 @@ import { escapeHtml } from '../../shared/sanitize';
 import type { BookSearchResult, SignatureData } from '../../shared/types';
 import { calculateSchoolYear } from '../../shared/schoolYear';
 import { SITE_LOGO, layout } from './layout';
-import { renderSignatureHtml, type SignatureOptions } from '../signature';
+import { BRAND, buildCredentialLine, renderSignatureHtml, type SignatureOptions } from '../signature';
 
 /** Chrome shared by every page that renders the masthead. */
 export interface ChromeOptions {
@@ -108,7 +108,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
   const body = `
 <div class="page-head">
   <h1>Dashboard</h1>
-  <p>Your signature updates automatically whenever you change your book or profile.</p>
+  <p>Your signature updates itself wherever you have already pasted it, whenever you change your book or profile.</p>
 </div>
 
 <div class="panel" style="padding:0;">
@@ -158,7 +158,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
     <h2>Signature preview</h2>
     ${renderSignatureHtml(data, options.signatureOptions)}
     <div class="actions">
-      <a class="btn small" href="/admin/signature">Get the HTML</a>
+      <a class="btn small" href="/admin/signature">Get the signature</a>
       <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
     </div>
   </div>
@@ -537,6 +537,44 @@ export interface SignaturePageOptions extends ChromeOptions {
   publicUrl: string;
   signatureHtml: string;
   notice?: string | null;
+  csrfToken: string;
+  /** Stable public address of the rendered signature image. */
+  imageUrl: string;
+  /** Pixel size of the stored image, for the img tag. */
+  imageSize: { width: number; height: number } | null;
+  /** True when the stored image predates the current details. */
+  imageStale: boolean;
+}
+
+/**
+ * The payload the canvas renderer draws from.
+ *
+ * Passed as a data attribute rather than an inline script so the page needs no
+ * script-src exception.
+ */
+function signatureRenderPayload(options: SignaturePageOptions): string {
+  const { data } = options;
+  return JSON.stringify({
+    revision: data.revision,
+    name: data.profile.name,
+    credentials: buildCredentialLine(data),
+    school: data.profile.showSchool ? data.profile.school : '',
+    subtitle: data.profile.showSubtitle ? data.profile.subtitle : '',
+    // The public logo route, not the admin one: it falls back to the built-in
+    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
+    // transparent pixel that the canvas would scale into an empty band.
+    logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
+    coverUrl: options.signatureOptions.hasCover
+      ? `/admin/image/cover?v=${data.revision}`
+      : null,
+    book: data.book ? { title: data.book.title, author: data.book.author } : null,
+    colours: {
+      navy: BRAND.navy,
+      rose: BRAND.rose,
+      gold: BRAND.gold,
+      muted: BRAND.muted,
+    },
+  });
 }
 
 /**
@@ -566,16 +604,43 @@ export const COPY_SCRIPT = `(function(){
 })();`;
 
 export function signaturePage(options: SignaturePageOptions): string {
-  const { data, publicUrl, signatureHtml } = options;
+  const { data, publicUrl, signatureHtml, imageUrl, imageSize } = options;
+
+  // The email-ready snippet: one image at a fixed address. Because the address
+  // never changes, an already-pasted signature picks up new details by itself.
+  const altText = [
+    data.profile.name,
+    buildCredentialLine(data),
+    data.profile.showSchool ? data.profile.school : '',
+    data.book ? `Currently reading ${data.book.title}${data.book.author ? ` by ${data.book.author}` : ''}` : '',
+  ]
+    .filter((part) => part !== '')
+    .join(' — ');
+
+  const imageSnippet =
+    `<a href="${escapeHtml(publicUrl)}"><img src="${escapeHtml(imageUrl)}"` +
+    (imageSize ? ` width="${imageSize.width}"` : '') +
+    ` alt="${escapeHtml(altText)}" style="display:block;border:0;outline:none;text-decoration:none;` +
+    (imageSize ? `width:${imageSize.width}px;max-width:100%;height:auto;` : '') +
+    `" /></a>`;
 
   const body = `
 <div class="page-head">
   <h1>Signature</h1>
-  <p>Paste this into your email client once. It updates itself whenever you change your book.</p>
+  <p>Paste this into your email client once. It keeps itself up to date.</p>
 </div>
 
-<div class="panel">
-  <h2>How it will look in an email</h2>
+<div class="panel" id="signature-image"
+     data-csrf="${escapeHtml(options.csrfToken)}"
+     data-stale="${options.imageStale ? 'true' : 'false'}"
+     data-signature="${escapeHtml(signatureRenderPayload(options))}">
+  <h2>Your signature</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Everything below — your name, year, house, school, book and cover — is drawn into a single
+    image at a fixed address. Change any of it and every signature you have already sent starts
+    showing the new version, with nothing to re-paste.
+  </p>
+
   <div class="email-chrome">
     <div class="email-chrome-bar">To: someone@example.com &nbsp;·&nbsp; Subject: Prep</div>
     <div class="email-chrome-body">
@@ -583,51 +648,80 @@ export function signaturePage(options: SignaturePageOptions): string {
       <p>Please find my essay attached.</p>
       <p>With thanks,</p>
       <hr class="sep" />
-      ${renderSignatureHtml(data, options.signatureOptions)}
+      <img id="signature-image-preview" data-src="${escapeHtml(imageUrl)}"
+           src="${escapeHtml(imageUrl)}"${imageSize ? ` width="${imageSize.width}"` : ''}
+           alt="${escapeHtml(altText)}"
+           style="display:block;max-width:100%;height:auto;" />
     </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn secondary small" type="button" id="signature-image-rebuild" hidden>Rebuild image</button>
+    <span id="signature-image-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
   </div>
 </div>
 
 <div class="panel">
-  <h2>Copy the HTML</h2>
+  <h2>Copy this into your email signature</h2>
   <p style="color:var(--muted);font-size:0.9rem;">
     Select everything in the box and copy it, then paste into your email signature editor.
   </p>
   <label class="visually-hidden" for="signature-html">Email signature HTML</label>
-  <textarea class="code" id="signature-html" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
+  <textarea class="code" id="signature-html" readonly spellcheck="false" style="min-height:120px;">${escapeHtml(imageSnippet)}</textarea>
   <div class="actions">
     <button class="btn" type="button" id="copy-button" hidden>Copy HTML</button>
     <span id="copy-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
   </div>
+  <p class="hint">
+    In Outlook on Windows it usually pastes better to open the
+    <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">public signature page</a>,
+    select the signature there and copy that instead.
+  </p>
 </div>
 
 <div class="panel">
-  <h2>Stable public address</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    This address always shows your current book. It needs no sign-in to view, and cannot be edited by anyone who opens it.
+  <h2>Stable addresses</h2>
+  <dl class="summary" style="grid-template-columns:8rem 1fr;">
+    <dt>Image</dt>
+    <dd><input type="text" readonly value="${escapeHtml(imageUrl)}" aria-label="Signature image URL" /></dd>
+    <dt>Web page</dt>
+    <dd><input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" /></dd>
+  </dl>
+  <p class="hint">
+    Neither address ever changes. Anyone with them can view your signature; nobody can alter it
+    without signing in here.
   </p>
-  <input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" />
+</div>
+
+<div class="panel">
+  <h2>Text version</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    The same signature built from real text rather than an image. It is sharper and can be read
+    by screen readers, but <strong>only the cover updates by itself</strong> — the words are fixed
+    at the moment you copy them, so you would need to re-copy this after every change. Use it only
+    if an email client refuses the image.
+  </p>
+  <label class="visually-hidden" for="signature-html-text">Text-based email signature HTML</label>
+  <textarea class="code" id="signature-html-text" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
 </div>
 
 <div class="panel">
   <h2>Before you paste it</h2>
-  <p style="font-size:0.9rem;">Two things worth knowing about how email clients treat this:</p>
   <ul style="font-size:0.9rem;color:var(--ink);padding-left:1.2rem;">
     <li style="margin-bottom:0.5rem;">
-      <strong>Remote images.</strong> The logo and cover load from this Worker when the email is
-      opened. Most clients show them straight away for a sender the recipient has written to
-      before; some, including Outlook on Windows with the default settings, ask the reader to
-      click “Download pictures” first. The text of your signature is unaffected either way.
+      <strong>Remote images.</strong> The signature loads when the email is opened. Most clients
+      show it straight away for a sender the reader has written to before; some, including Outlook
+      on Windows with default settings, ask them to click “Download pictures” first. The alt text
+      carries your details in the meantime.
     </li>
     <li style="margin-bottom:0.5rem;">
-      <strong>Updating.</strong> Because the images are fetched when the email is opened, an
-      already-sent email may show your newer book rather than the one you were reading when you
-      sent it. If you would rather old emails froze, say so and the cover can be pinned per send
-      instead.
+      <strong>Gmail caches images on its own servers.</strong> A change can take a while to appear
+      for Gmail readers even though the address is unchanged. Everywhere else it updates within
+      about five minutes.
     </li>
     <li>
-      <strong>Gmail</strong> sometimes strips the outer table's left border rule. The signature is
-      built so it still reads correctly if that happens.
+      <strong>Old emails show your current book.</strong> That is the intended behaviour: the
+      signature is always live rather than a snapshot of the day you sent it.
     </li>
   </ul>
 </div>`;
@@ -636,6 +730,6 @@ export function signaturePage(options: SignaturePageOptions): string {
     title: 'Signature',
     active: 'signature',
     notice: options.notice ?? null,
-    scripts: ['/admin/js/copy.js'],
+    scripts: ['/admin/js/copy.js', '/admin/js/signature-image.js'],
   });
 }

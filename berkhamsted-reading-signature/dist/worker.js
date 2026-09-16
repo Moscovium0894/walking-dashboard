@@ -586,6 +586,24 @@ async function bumpRevision(env) {
   await setSetting(env, "revision", String(next));
   return next;
 }
+async function getSignatureImageRevision(env) {
+  const value = await getSetting(env, "signature_image_revision");
+  const parsed = Number.parseInt(value ?? "0", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+async function setSignatureImageRevision(env, revision) {
+  await setSetting(env, "signature_image_revision", String(revision));
+}
+async function getSignatureImageSize(env) {
+  const raw = await getSetting(env, "signature_image_size");
+  if (raw === null) return null;
+  const [width, height] = raw.split("x").map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return { width, height };
+}
+async function setSignatureImageSize(env, size) {
+  await setSetting(env, "signature_image_size", `${size.width}x${size.height}`);
+}
 async function getSignatureData(env) {
   const [profile, book, revision] = await Promise.all([
     getProfile(env),
@@ -712,6 +730,16 @@ function html(body, options = {}) {
     status: options.status ?? 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
+      ...options.headers
+    }
+  });
+}
+function json(data, options = {}) {
+  return new Response(JSON.stringify(data), {
+    status: options.status ?? 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
       ...options.headers
     }
   });
@@ -1259,7 +1287,7 @@ function dashboardPage(options) {
   const body = `
 <div class="page-head">
   <h1>Dashboard</h1>
-  <p>Your signature updates automatically whenever you change your book or profile.</p>
+  <p>Your signature updates itself wherever you have already pasted it, whenever you change your book or profile.</p>
 </div>
 
 <div class="panel" style="padding:0;">
@@ -1305,7 +1333,7 @@ function dashboardPage(options) {
     <h2>Signature preview</h2>
     ${renderSignatureHtml(data, options.signatureOptions)}
     <div class="actions">
-      <a class="btn small" href="/admin/signature">Get the HTML</a>
+      <a class="btn small" href="/admin/signature">Get the signature</a>
       <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
     </div>
   </div>
@@ -1597,16 +1625,54 @@ function profilePage(options) {
     error: options.error ?? null
   });
 }
+function signatureRenderPayload(options) {
+  const { data } = options;
+  return JSON.stringify({
+    revision: data.revision,
+    name: data.profile.name,
+    credentials: buildCredentialLine(data),
+    school: data.profile.showSchool ? data.profile.school : "",
+    subtitle: data.profile.showSubtitle ? data.profile.subtitle : "",
+    // The public logo route, not the admin one: it falls back to the built-in
+    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
+    // transparent pixel that the canvas would scale into an empty band.
+    logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
+    coverUrl: options.signatureOptions.hasCover ? `/admin/image/cover?v=${data.revision}` : null,
+    book: data.book ? { title: data.book.title, author: data.book.author } : null,
+    colours: {
+      navy: BRAND.navy,
+      rose: BRAND.rose,
+      gold: BRAND.gold,
+      muted: BRAND.muted
+    }
+  });
+}
 function signaturePage(options) {
-  const { data, publicUrl, signatureHtml } = options;
+  const { data, publicUrl, signatureHtml, imageUrl, imageSize } = options;
+  const altText = [
+    data.profile.name,
+    buildCredentialLine(data),
+    data.profile.showSchool ? data.profile.school : "",
+    data.book ? `Currently reading ${data.book.title}${data.book.author ? ` by ${data.book.author}` : ""}` : ""
+  ].filter((part) => part !== "").join(" \u2014 ");
+  const imageSnippet = `<a href="${escapeHtml(publicUrl)}"><img src="${escapeHtml(imageUrl)}"` + (imageSize ? ` width="${imageSize.width}"` : "") + ` alt="${escapeHtml(altText)}" style="display:block;border:0;outline:none;text-decoration:none;` + (imageSize ? `width:${imageSize.width}px;max-width:100%;height:auto;` : "") + `" /></a>`;
   const body = `
 <div class="page-head">
   <h1>Signature</h1>
-  <p>Paste this into your email client once. It updates itself whenever you change your book.</p>
+  <p>Paste this into your email client once. It keeps itself up to date.</p>
 </div>
 
-<div class="panel">
-  <h2>How it will look in an email</h2>
+<div class="panel" id="signature-image"
+     data-csrf="${escapeHtml(options.csrfToken)}"
+     data-stale="${options.imageStale ? "true" : "false"}"
+     data-signature="${escapeHtml(signatureRenderPayload(options))}">
+  <h2>Your signature</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    Everything below \u2014 your name, year, house, school, book and cover \u2014 is drawn into a single
+    image at a fixed address. Change any of it and every signature you have already sent starts
+    showing the new version, with nothing to re-paste.
+  </p>
+
   <div class="email-chrome">
     <div class="email-chrome-bar">To: someone@example.com &nbsp;\xB7&nbsp; Subject: Prep</div>
     <div class="email-chrome-body">
@@ -1614,51 +1680,80 @@ function signaturePage(options) {
       <p>Please find my essay attached.</p>
       <p>With thanks,</p>
       <hr class="sep" />
-      ${renderSignatureHtml(data, options.signatureOptions)}
+      <img id="signature-image-preview" data-src="${escapeHtml(imageUrl)}"
+           src="${escapeHtml(imageUrl)}"${imageSize ? ` width="${imageSize.width}"` : ""}
+           alt="${escapeHtml(altText)}"
+           style="display:block;max-width:100%;height:auto;" />
     </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn secondary small" type="button" id="signature-image-rebuild" hidden>Rebuild image</button>
+    <span id="signature-image-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
   </div>
 </div>
 
 <div class="panel">
-  <h2>Copy the HTML</h2>
+  <h2>Copy this into your email signature</h2>
   <p style="color:var(--muted);font-size:0.9rem;">
     Select everything in the box and copy it, then paste into your email signature editor.
   </p>
   <label class="visually-hidden" for="signature-html">Email signature HTML</label>
-  <textarea class="code" id="signature-html" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
+  <textarea class="code" id="signature-html" readonly spellcheck="false" style="min-height:120px;">${escapeHtml(imageSnippet)}</textarea>
   <div class="actions">
     <button class="btn" type="button" id="copy-button" hidden>Copy HTML</button>
     <span id="copy-status" role="status" style="font-size:0.85rem;color:var(--muted);"></span>
   </div>
+  <p class="hint">
+    In Outlook on Windows it usually pastes better to open the
+    <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">public signature page</a>,
+    select the signature there and copy that instead.
+  </p>
 </div>
 
 <div class="panel">
-  <h2>Stable public address</h2>
-  <p style="color:var(--muted);font-size:0.9rem;">
-    This address always shows your current book. It needs no sign-in to view, and cannot be edited by anyone who opens it.
+  <h2>Stable addresses</h2>
+  <dl class="summary" style="grid-template-columns:8rem 1fr;">
+    <dt>Image</dt>
+    <dd><input type="text" readonly value="${escapeHtml(imageUrl)}" aria-label="Signature image URL" /></dd>
+    <dt>Web page</dt>
+    <dd><input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" /></dd>
+  </dl>
+  <p class="hint">
+    Neither address ever changes. Anyone with them can view your signature; nobody can alter it
+    without signing in here.
   </p>
-  <input type="text" readonly value="${escapeHtml(publicUrl)}" aria-label="Public signature URL" />
+</div>
+
+<div class="panel">
+  <h2>Text version</h2>
+  <p style="color:var(--muted);font-size:0.9rem;">
+    The same signature built from real text rather than an image. It is sharper and can be read
+    by screen readers, but <strong>only the cover updates by itself</strong> \u2014 the words are fixed
+    at the moment you copy them, so you would need to re-copy this after every change. Use it only
+    if an email client refuses the image.
+  </p>
+  <label class="visually-hidden" for="signature-html-text">Text-based email signature HTML</label>
+  <textarea class="code" id="signature-html-text" readonly spellcheck="false">${escapeHtml(signatureHtml)}</textarea>
 </div>
 
 <div class="panel">
   <h2>Before you paste it</h2>
-  <p style="font-size:0.9rem;">Two things worth knowing about how email clients treat this:</p>
   <ul style="font-size:0.9rem;color:var(--ink);padding-left:1.2rem;">
     <li style="margin-bottom:0.5rem;">
-      <strong>Remote images.</strong> The logo and cover load from this Worker when the email is
-      opened. Most clients show them straight away for a sender the recipient has written to
-      before; some, including Outlook on Windows with the default settings, ask the reader to
-      click \u201CDownload pictures\u201D first. The text of your signature is unaffected either way.
+      <strong>Remote images.</strong> The signature loads when the email is opened. Most clients
+      show it straight away for a sender the reader has written to before; some, including Outlook
+      on Windows with default settings, ask them to click \u201CDownload pictures\u201D first. The alt text
+      carries your details in the meantime.
     </li>
     <li style="margin-bottom:0.5rem;">
-      <strong>Updating.</strong> Because the images are fetched when the email is opened, an
-      already-sent email may show your newer book rather than the one you were reading when you
-      sent it. If you would rather old emails froze, say so and the cover can be pinned per send
-      instead.
+      <strong>Gmail caches images on its own servers.</strong> A change can take a while to appear
+      for Gmail readers even though the address is unchanged. Everywhere else it updates within
+      about five minutes.
     </li>
     <li>
-      <strong>Gmail</strong> sometimes strips the outer table's left border rule. The signature is
-      built so it still reads correctly if that happens.
+      <strong>Old emails show your current book.</strong> That is the intended behaviour: the
+      signature is always live rather than a snapshot of the day you sent it.
     </li>
   </ul>
 </div>`;
@@ -1666,7 +1761,7 @@ function signaturePage(options) {
     title: "Signature",
     active: "signature",
     notice: options.notice ?? null,
-    scripts: ["/admin/js/copy.js"]
+    scripts: ["/admin/js/copy.js", "/admin/js/signature-image.js"]
   });
 }
 
@@ -2038,6 +2133,267 @@ var CROPPER_JS = `(function () {
 })();
 `;
 
+// src/worker/ui/signatureImageScript.ts
+var SIGNATURE_METRICS = {
+  /** Rendered width of the signature block. */
+  width: 460,
+  paddingLeft: 18,
+  paddingTop: 2,
+  paddingBottom: 6,
+  /** Navy rule down the left edge. */
+  barWidth: 3,
+  logoWidth: 150,
+  coverWidth: 58,
+  coverGap: 14,
+  nameSize: 19,
+  nameLeading: 24,
+  credentialsSize: 12,
+  credentialsLeading: 16,
+  credentialsTracking: 1.4,
+  schoolSize: 14,
+  schoolLeading: 19,
+  subtitleSize: 12,
+  subtitleLeading: 17,
+  labelSize: 10,
+  labelLeading: 13,
+  labelTracking: 1.6,
+  titleSize: 14,
+  titleLeading: 19,
+  authorSize: 12,
+  authorLeading: 17,
+  ruleWidth: 56,
+  gapAfterLogo: 14,
+  gapBeforeRule: 16,
+  gapAfterRule: 14,
+  /** Drawn at this multiple, then displayed at 1x, so it stays sharp on high-DPI screens. */
+  pixelRatio: 2
+};
+var SIGNATURE_IMAGE_JS = `(function () {
+  'use strict';
+
+  var root = document.getElementById('signature-image');
+  if (!root || typeof HTMLCanvasElement === 'undefined') return;
+
+  var M = ${JSON.stringify(SIGNATURE_METRICS)};
+  var data = null;
+  try {
+    data = JSON.parse(root.getAttribute('data-signature') || 'null');
+  } catch (error) {
+    return;
+  }
+  if (!data) return;
+
+  var statusEl = document.getElementById('signature-image-status');
+  var previewEl = document.getElementById('signature-image-preview');
+  var rebuildBtn = document.getElementById('signature-image-rebuild');
+
+  var SERIF = "Georgia, 'Times New Roman', Times, serif";
+  var SANS = "Arial, 'Helvetica Neue', Helvetica, sans-serif";
+
+  function say(message) {
+    if (statusEl) statusEl.textContent = message || '';
+  }
+
+  function loadImage(src) {
+    return new Promise(function (resolve) {
+      if (!src) { resolve(null); return; }
+      var img = new Image();
+      // Same-origin, so the canvas is never tainted and toBlob keeps working.
+      img.onload = function () {
+        // A placeholder pixel would be scaled into a large empty band, so treat
+        // anything that small as no image at all.
+        resolve(img.naturalWidth > 4 && img.naturalHeight > 4 ? img : null);
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = src;
+    });
+  }
+
+  /** Draw text with letter spacing, which canvas does not support directly. */
+  function trackedText(ctx, text, x, y, tracking) {
+    if (!tracking) { ctx.fillText(text, x, y); return ctx.measureText(text).width; }
+    var cursor = x;
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text.charAt(i);
+      ctx.fillText(ch, cursor, y);
+      cursor += ctx.measureText(ch).width + tracking;
+    }
+    return cursor - x;
+  }
+
+  function measureBlockHeight(hasBook, hasCover, showSchool, showSubtitle, hasCredentials, logo) {
+    var h = M.paddingTop;
+    if (logo) h += Math.round(logo.height * (M.logoWidth / logo.width)) + M.gapAfterLogo;
+    h += M.nameLeading;
+    if (hasCredentials) h += 5 + M.credentialsLeading;
+    if (showSchool) h += 5 + M.schoolLeading;
+    if (showSubtitle) h += 3 + M.subtitleLeading;
+    if (hasBook) {
+      h += M.gapBeforeRule + 1 + M.gapAfterRule;
+      var textBlock = M.labelLeading + 4 + M.titleLeading + (data.book.author ? 2 + M.authorLeading : 0);
+      var coverBlock = hasCover ? Math.round(M.coverWidth * 1.5) : 0;
+      h += Math.max(textBlock, coverBlock);
+    }
+    return h + M.paddingBottom;
+  }
+
+  function render() {
+    say('Building the signature image...');
+
+    return Promise.all([loadImage(data.logoUrl), loadImage(data.coverUrl)]).then(function (images) {
+      var logo = images[0];
+      var cover = images[1];
+
+      var hasBook = !!data.book;
+      var hasCover = hasBook && !!cover;
+      var showSchool = !!data.school;
+      var showSubtitle = !!data.subtitle;
+      var hasCredentials = !!data.credentials;
+
+      var height = measureBlockHeight(hasBook, hasCover, showSchool, showSubtitle, hasCredentials, logo);
+
+      var canvas = document.createElement('canvas');
+      canvas.width = M.width * M.pixelRatio;
+      canvas.height = height * M.pixelRatio;
+      var ctx = canvas.getContext('2d');
+      ctx.scale(M.pixelRatio, M.pixelRatio);
+
+      // White background: mail clients composite onto unpredictable colours, and
+      // a transparent PNG would show whatever is behind it.
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, M.width, height);
+
+      ctx.fillStyle = data.colours.navy;
+      ctx.fillRect(0, 0, M.barWidth, height);
+
+      var x = M.barWidth + M.paddingLeft;
+      var y = M.paddingTop;
+      ctx.textBaseline = 'top';
+
+      if (logo) {
+        var logoHeight = Math.round(logo.height * (M.logoWidth / logo.width));
+        ctx.drawImage(logo, x, y, M.logoWidth, logoHeight);
+        y += logoHeight + M.gapAfterLogo;
+      }
+
+      ctx.fillStyle = data.colours.navy;
+      ctx.font = 'bold ' + M.nameSize + 'px ' + SERIF;
+      ctx.fillText(data.name, x, y);
+      y += M.nameLeading;
+
+      if (hasCredentials) {
+        y += 5;
+        ctx.fillStyle = data.colours.rose;
+        ctx.font = 'bold ' + M.credentialsSize + 'px ' + SANS;
+        trackedText(ctx, data.credentials.toUpperCase(), x, y, M.credentialsTracking);
+        y += M.credentialsLeading;
+      }
+
+      if (showSchool) {
+        y += 5;
+        ctx.fillStyle = data.colours.muted;
+        ctx.font = M.schoolSize + 'px ' + SERIF;
+        ctx.fillText(data.school, x, y);
+        y += M.schoolLeading;
+      }
+
+      if (showSubtitle) {
+        y += 3;
+        ctx.fillStyle = data.colours.muted;
+        ctx.font = 'italic ' + M.subtitleSize + 'px ' + SANS;
+        ctx.fillText(data.subtitle, x, y);
+        y += M.subtitleLeading;
+      }
+
+      if (hasBook) {
+        y += M.gapBeforeRule;
+        ctx.fillStyle = data.colours.gold;
+        ctx.fillRect(x, y, M.ruleWidth, 1);
+        y += 1 + M.gapAfterRule;
+
+        var textX = x;
+        if (hasCover) {
+          var coverHeight = Math.round(cover.height * (M.coverWidth / cover.width));
+          ctx.drawImage(cover, x, y, M.coverWidth, coverHeight);
+          textX = x + M.coverWidth + M.coverGap;
+        }
+
+        var ty = y;
+        ctx.fillStyle = data.colours.muted;
+        ctx.font = M.labelSize + 'px ' + SANS;
+        trackedText(ctx, 'CURRENTLY READING', textX, ty, M.labelTracking);
+        ty += M.labelLeading + 4;
+
+        ctx.fillStyle = data.colours.navy;
+        ctx.font = 'bold italic ' + M.titleSize + 'px ' + SERIF;
+        ctx.fillText(data.book.title, textX, ty);
+        ty += M.titleLeading;
+
+        if (data.book.author) {
+          ty += 2;
+          ctx.fillStyle = data.colours.muted;
+          ctx.font = M.authorSize + 'px ' + SANS;
+          ctx.fillText(data.book.author, textX, ty);
+        }
+      }
+
+      return new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) {
+          if (blob) resolve({ blob: blob, width: M.width, height: height });
+          else reject(new Error('could not export the image'));
+        }, 'image/png');
+      });
+    });
+  }
+
+  function upload(result) {
+    var form = new FormData();
+    form.append('csrf', root.getAttribute('data-csrf') || '');
+    form.append('revision', String(data.revision));
+    form.append('width', String(result.width));
+    form.append('height', String(result.height));
+    form.append('image', result.blob, 'signature.png');
+
+    return fetch('/admin/signature/image', {
+      method: 'POST',
+      body: form,
+      credentials: 'same-origin',
+    }).then(function (response) {
+      if (!response.ok) throw new Error('upload failed');
+      return response;
+    });
+  }
+
+  function run() {
+    return render()
+      .then(upload)
+      .then(function () {
+        say('Signature image is up to date.');
+        if (previewEl) {
+          // Cache-bust the preview only; the address used in email stays stable.
+          previewEl.src = previewEl.getAttribute('data-src') + '?preview=' + Date.now();
+        }
+        root.setAttribute('data-stale', 'false');
+      })
+      .catch(function (error) {
+        say('The signature image could not be rebuilt: ' + error.message);
+      });
+  }
+
+  if (rebuildBtn) {
+    rebuildBtn.hidden = false;
+    rebuildBtn.addEventListener('click', function () { run(); });
+  }
+
+  // Rebuild whenever the stored image is older than the current details.
+  if (root.getAttribute('data-stale') === 'true') {
+    run();
+  } else {
+    say('Signature image is up to date.');
+  }
+})();
+`;
+
 // src/worker/validate.ts
 var LIMITS = {
   name: 80,
@@ -2292,7 +2648,7 @@ async function handleSignature(request, env, url) {
   const segments = url.pathname.split("/").filter((part) => part !== "");
   if (segments[0] !== "signature") return null;
   const slugSegment = segments[1] ?? "";
-  const baseSlug = slugSegment.endsWith(".txt") ? slugSegment.slice(0, -4) : slugSegment;
+  const baseSlug = slugSegment.replace(/\.(txt|png)$/, "");
   if (baseSlug !== config.slug) return null;
   const asset = segments[2];
   const headers = publicSecurityHeaders();
@@ -2300,6 +2656,24 @@ async function handleSignature(request, env, url) {
     "logo.png": "logo",
     "cover.jpg": "cover"
   };
+  if (slugSegment.endsWith(".png") && baseSlug === config.slug) {
+    const image = await getImage(env, "signature");
+    if (image === null) return emptyImage(headers);
+    const etag = `"${image.etag}"`;
+    if (request.headers.get("If-None-Match") === etag) {
+      return new Response(null, { status: 304, headers: { ETag: etag, ...headers } });
+    }
+    return new Response(image.bytes, {
+      headers: {
+        "Content-Type": image.contentType,
+        ETag: etag,
+        "Cache-Control": "public, max-age=300, must-revalidate",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Access-Control-Allow-Origin": "*",
+        ...headers
+      }
+    });
+  }
   if (asset !== void 0 && asset in PUBLIC_ASSETS) {
     const key = PUBLIC_ASSETS[asset];
     const image = await getImage(env, key);
@@ -2345,6 +2719,7 @@ async function handleAdmin(request, env, url) {
   const method = request.method;
   if (path === "/admin/js/cropper.js") return scriptResponse(CROPPER_JS);
   if (path === "/admin/js/copy.js") return scriptResponse(COPY_JS);
+  if (path === "/admin/js/signature-image.js") return scriptResponse(SIGNATURE_IMAGE_JS);
   if (path === "/admin/login") {
     if (method === "GET") {
       const existing = await getSession(env, request);
@@ -2428,13 +2803,23 @@ async function handleAdmin(request, env, url) {
   }
   if (path === "/admin/signature" && method === "GET") {
     const { data, options, publicUrl } = await buildContext();
+    const [imageRevision, imageSize] = await Promise.all([
+      getSignatureImageRevision(env),
+      getSignatureImageSize(env)
+    ]);
     return adminHtml(
       signaturePage({
         data,
         signatureOptions: options,
         publicUrl,
         signatureHtml: renderSignatureHtml(data, options),
-        notice
+        notice,
+        csrfToken,
+        imageUrl: `${url.origin}/signature/${config.slug}.png`,
+        imageSize,
+        // Stale whenever the stored image predates the current details, which
+        // is what triggers the dashboard to redraw and re-upload it.
+        imageStale: imageRevision !== data.revision
       })
     );
   }
@@ -2580,6 +2965,31 @@ async function handleAdmin(request, env, url) {
       return redirect("/admin/profile?ok=profile-saved");
     }
     return notFound();
+  }
+  if (path === "/admin/signature/image" && method === "POST") {
+    const form = await request.formData();
+    const blocked = await guardMutation(form);
+    if (blocked !== null) return blocked;
+    const validated = await validateImageUpload(form.get("image"));
+    if (!validated.ok || validated.value === void 0) {
+      return json({ error: "The rendered image was not accepted." }, { status: 400 });
+    }
+    const width = Number.parseInt(formText(form, "width"), 10);
+    const height = Number.parseInt(formText(form, "height"), 10);
+    const revision = Number.parseInt(formText(form, "revision"), 10);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+      return json({ error: "Missing image dimensions." }, { status: 400 });
+    }
+    await putImage(
+      env,
+      "signature",
+      validated.value.contentType,
+      validated.value.bytes,
+      await sha256Hex(`signature:${validated.value.bytes.byteLength}:${Date.now()}`)
+    );
+    await setSignatureImageSize(env, { width, height });
+    await setSignatureImageRevision(env, Number.isFinite(revision) ? revision : 0);
+    return json({ ok: true });
   }
   if (path === "/admin/logo" && method === "POST") {
     const form = await request.formData();

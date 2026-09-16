@@ -46,9 +46,17 @@ The public signature shows:
 The private dashboard lets you search for a book, make it current, edit your
 profile, upload the logo, and copy the signature HTML.
 
-The signature contains **no JavaScript**. Email clients do not run it, so it is
-built as a table-based HTML fragment with inline styles, which is the only thing
-that renders consistently from Outlook to Gmail to Apple Mail.
+The signature contains **no JavaScript**. Email clients do not run it.
+
+It is served as a **single image at a fixed address**, which is what lets an
+already-sent signature update itself. A mail client makes no requests except for
+images, so text baked into the HTML would freeze at the moment it was copied.
+Drawing the whole signature into one image means the name, year group, house,
+school, book title, author and cover all change the moment you change them, with
+nothing to re-paste.
+
+A table-based HTML version is also offered for clients that refuse images, but
+only its cover updates; its text is fixed at copy time.
 
 ---
 
@@ -67,6 +75,7 @@ Email client ──▶ /signature/otto/cover.jpg   (bytes served from D1, never 
 
 | Path | Access | Purpose |
 |---|---|---|
+| `/signature/otto.png` | public | **the signature as one image — what email points at** |
 | `/signature/otto` | public | the signature as an HTML document |
 | `/signature/otto.txt` | public | plain-text fallback |
 | `/signature/otto/logo.png` | public | the signature logo, uploaded or default |
@@ -174,7 +183,7 @@ store a year group — that is calculated on every read.
 |---|---|
 | `profile` | one row: name, date of birth, house, school, subtitle, visibility flags |
 | `current_book` | one row: title, author, cover URL, ISBN, year, source |
-| `images` | the uploaded signature logo, its original, and the cover |
+| `images` | the rendered signature PNG, the uploaded logo, its original, and the cover |
 | `settings` | the revision counter used for cache busting |
 | `sessions` | hashed session and CSRF tokens |
 | `rate_limit` | fixed-window counters |
@@ -380,27 +389,49 @@ The year group is not editable. It is derived from your date of birth.
 
 ## 12. Installing the signature in an email client
 
-Go to **Signature**, then either copy the HTML or use the public URL.
+Go to **Signature** and copy the snippet. It is one line pointing at your
+signature image:
 
-**Outlook (web), Gmail, Apple Mail:** select everything in the **Copy the HTML**
-box, copy it, and paste it into the signature editor in your email settings.
+```html
+<a href="https://…/signature/otto"><img src="https://…/signature/otto.png" width="460" alt="…" /></a>
+```
 
-**Outlook (Windows desktop):** open the public URL in a browser, select the
-signature on the page, copy, and paste into File → Options → Mail → Signatures.
-Pasting rendered content works better there than pasting raw HTML.
+Paste that into the signature editor in your email settings. **Once.** You never
+touch it again: the address is fixed, and the picture behind it is redrawn
+whenever you change anything.
 
-Two things worth knowing:
+**Outlook on Windows** often pastes rendered content better than raw HTML. Open
+the public signature page in a browser, select the signature, copy, and paste
+that into File → Options → Mail → Signatures.
 
-- **Remote images.** The logo and cover load from the Worker when the email is
-  opened. Most clients show them immediately for a known sender; some, including
-  Outlook on Windows with default settings, ask the reader to click "Download
-  pictures" first. The text is unaffected.
-- **Old emails update too.** Because images are fetched when the email is
-  opened, an email you sent last term will show your *current* book, not the one
-  you were reading when you sent it. That is usually what people want from this
-  kind of signature, but it is worth knowing.
+### How the image stays current
 
----
+The Worker has no font rasteriser, and shipping one would add megabytes to a
+bundle that is deployed by pasting it into a dashboard editor. The browser
+already has fonts and a canvas, so the dashboard does the drawing:
+
+1. You change your book or profile. The revision counter increments.
+2. Next time you open the dashboard, it notices the stored image was rendered at
+   an older revision, redraws the signature on a canvas and uploads the PNG.
+3. `/signature/otto.png` serves the new bytes at the same address as before.
+
+So the image refreshes when you next visit the dashboard, which is the same
+visit in which you changed the book. The **Signature** page shows the status and
+has a **Rebuild image** button if you ever want to force it.
+
+### Things worth knowing
+
+- **Remote images.** The signature loads when the email is opened. Some clients,
+  including Outlook on Windows with default settings, ask the reader to click
+  "Download pictures" first. The alt text carries your details until they do.
+- **Gmail caches images on its own servers.** A change can take a while to reach
+  Gmail readers even though the address has not changed. Elsewhere it appears
+  within about five minutes.
+- **Old emails show your current book.** That is intended: the signature is live,
+  not a snapshot of the day you sent it.
+- **The image is not selectable text.** That is the price of it updating itself.
+  The alt text carries the same information for screen readers and for clients
+  with images turned off.
 
 ## 13. How the year is calculated
 

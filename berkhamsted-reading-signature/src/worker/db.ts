@@ -146,6 +146,9 @@ export async function setCurrentBook(
 /**
  * Images we hold bytes for, and therefore serve from our own origin.
  *
+ * 'signature'     the whole signature rendered to a PNG by the dashboard. This
+ *                 is what an already-sent email loads, so it is the only way
+ *                 text can update after the fact.
  * 'logo'          the crop used in the email signature, full colour on white.
  * 'logo-original' the untouched upload, kept so the crop can be redone later
  *                 without asking for the file again.
@@ -153,7 +156,7 @@ export async function setCurrentBook(
  * The site's own branding is NOT here. The masthead and login logo are static
  * assets baked into the build, deliberately not editable through the admin UI.
  */
-export type ImageKey = 'cover' | 'logo' | 'logo-original';
+export type ImageKey = 'cover' | 'logo' | 'logo-original' | 'signature';
 
 export interface StoredImage {
   contentType: string;
@@ -268,6 +271,43 @@ export async function bumpRevision(env: Env): Promise<number> {
   const next = (await getRevision(env)) + 1;
   await setSetting(env, 'revision', String(next));
   return next;
+}
+
+/**
+ * The revision the stored signature image was rendered at.
+ *
+ * When this falls behind the live revision the image is stale, and the
+ * dashboard rebuilds it on the next visit.
+ */
+export async function getSignatureImageRevision(env: Env): Promise<number> {
+  const value = await getSetting(env, 'signature_image_revision');
+  const parsed = Number.parseInt(value ?? '0', 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export async function setSignatureImageRevision(env: Env, revision: number): Promise<void> {
+  await setSetting(env, 'signature_image_revision', String(revision));
+}
+
+/** Pixel dimensions of the stored signature image, for the <img> tag. */
+export interface SignatureImageSize {
+  width: number;
+  height: number;
+}
+
+export async function getSignatureImageSize(env: Env): Promise<SignatureImageSize | null> {
+  const raw = await getSetting(env, 'signature_image_size');
+  if (raw === null) return null;
+  const [width, height] = raw.split('x').map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return { width: width as number, height: height as number };
+}
+
+export async function setSignatureImageSize(
+  env: Env,
+  size: SignatureImageSize,
+): Promise<void> {
+  await setSetting(env, 'signature_image_size', `${size.width}x${size.height}`);
 }
 
 // --- Composed read model -------------------------------------------------

@@ -23,6 +23,10 @@ import {
 import {
   getCurrentBook,
   getImage,
+  getSignatureImageRevision,
+  getSignatureImageSize,
+  setSignatureImageRevision,
+  setSignatureImageSize,
   getSignatureData,
   hasImage,
   putImage,
@@ -46,6 +50,7 @@ import {
 import {
   adminSecurityHeaders,
   html,
+  json,
   notFound,
   publicSecurityHeaders,
   redirect,
@@ -58,6 +63,7 @@ import {
 } from './signature';
 import { bookPage, dashboardPage, loginPage, profilePage, signaturePage } from './ui/pages';
 import { COPY_JS, CROPPER_JS } from './ui/clientScripts';
+import { SIGNATURE_IMAGE_JS } from './ui/signatureImageScript';
 import { validateBook, validateImageUpload, validateProfile, validateSearchQuery } from './validate';
 
 /**
@@ -171,7 +177,7 @@ async function handleSignature(request: Request, env: Env, url: URL): Promise<Re
   if (segments[0] !== 'signature') return null;
 
   const slugSegment = segments[1] ?? '';
-  const baseSlug = slugSegment.endsWith('.txt') ? slugSegment.slice(0, -4) : slugSegment;
+  const baseSlug = slugSegment.replace(/\.(txt|png)$/, '');
   if (baseSlug !== config.slug) return null;
 
   const asset = segments[2];
@@ -181,6 +187,30 @@ async function handleSignature(request: Request, env: Env, url: URL): Promise<Re
     'logo.png': 'logo',
     'cover.jpg': 'cover',
   };
+
+  // The whole signature as one image. Its address never changes, because an
+  // already-sent email cannot be given a new URL - that is the entire point.
+  // Caching is therefore short and revalidated rather than immutable.
+  if (slugSegment.endsWith('.png') && baseSlug === config.slug) {
+    const image = await getImage(env, 'signature');
+    if (image === null) return emptyImage(headers);
+
+    const etag = `"${image.etag}"`;
+    if (request.headers.get('If-None-Match') === etag) {
+      return new Response(null, { status: 304, headers: { ETag: etag, ...headers } });
+    }
+
+    return new Response(image.bytes, {
+      headers: {
+        'Content-Type': image.contentType,
+        ETag: etag,
+        'Cache-Control': 'public, max-age=300, must-revalidate',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        'Access-Control-Allow-Origin': '*',
+        ...headers,
+      },
+    });
+  }
 
   if (asset !== undefined && asset in PUBLIC_ASSETS) {
     const key = PUBLIC_ASSETS[asset] as ImageKey;
@@ -250,6 +280,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   // without a session lets the login page stay cheap.
   if (path === '/admin/js/cropper.js') return scriptResponse(CROPPER_JS);
   if (path === '/admin/js/copy.js') return scriptResponse(COPY_JS);
+  if (path === '/admin/js/signature-image.js') return scriptResponse(SIGNATURE_IMAGE_JS);
 
   // --- Login ---
   if (path === '/admin/login') {
@@ -364,6 +395,11 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   // --- Signature ---
   if (path === '/admin/signature' && method === 'GET') {
     const { data, options, publicUrl } = await buildContext();
+    const [imageRevision, imageSize] = await Promise.all([
+      getSignatureImageRevision(env),
+      getSignatureImageSize(env),
+    ]);
+
     return adminHtml(
       signaturePage({
         data,
@@ -371,6 +407,12 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
         publicUrl,
         signatureHtml: renderSignatureHtml(data, options),
         notice,
+        csrfToken,
+        imageUrl: `${url.origin}/signature/${config.slug}.png`,
+        imageSize,
+        // Stale whenever the stored image predates the current details, which
+        // is what triggers the dashboard to redraw and re-upload it.
+        imageStale: imageRevision !== data.revision,
       }),
     );
   }
@@ -536,6 +578,42 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     }
 
     return notFound();
+  }
+
+  // --- Signature image upload, posted by the dashboard's canvas renderer ---
+  if (path === '/admin/signature/image' && method === 'POST') {
+    const form = await request.formData();
+    const blocked = await guardMutation(form);
+    if (blocked !== null) return blocked;
+
+    const validated = await validateImageUpload(form.get('image'));
+    if (!validated.ok || validated.value === undefined) {
+      return json({ error: 'The rendered image was not accepted.' }, { status: 400 });
+    }
+
+    const width = Number.parseInt(formText(form, 'width'), 10);
+    const height = Number.parseInt(formText(form, 'height'), 10);
+    const revision = Number.parseInt(formText(form, 'revision'), 10);
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
+      return json({ error: 'Missing image dimensions.' }, { status: 400 });
+    }
+
+    await putImage(
+      env,
+      'signature',
+      validated.value.contentType,
+      validated.value.bytes,
+      await sha256Hex(`signature:${validated.value.bytes.byteLength}:${Date.now()}`),
+    );
+    await setSignatureImageSize(env, { width, height });
+
+    // Stamp it with the revision it was rendered from, not the current one: if
+    // the details changed while it rendered, it is already stale and the next
+    // page view rebuilds it.
+    await setSignatureImageRevision(env, Number.isFinite(revision) ? revision : 0);
+
+    return json({ ok: true });
   }
 
   // --- Logo upload ---
