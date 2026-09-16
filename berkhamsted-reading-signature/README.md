@@ -107,12 +107,13 @@ src/
       pages.ts         the four admin pages
       clientScripts.ts the logo cropper and copy button
 migrations/          D1 migrations
-dist/worker.js       the built single-file bundle (committed, see below)
+dist/worker.js       readable bundle, for wrangler (committed)
+dist/worker.min.js   minified bundle, for pasting into the dashboard (committed)
 ```
 
-`dist/worker.js` is committed on purpose. It is what you paste into the
-Cloudflare dashboard if you are deploying that way. CI fails if it is out of
-date relative to the source.
+Both bundles are committed on purpose: `dist/worker.min.js` is what you paste
+into the Cloudflare dashboard if you deploy that way. CI fails if either is out
+of date relative to the source.
 
 ---
 
@@ -241,8 +242,14 @@ No terminal and no Git integration needed.
 2. Workers & Pages → **Create** → **Workers** → start from the Hello World
    template and name it `berkhamsted-reading-signature`.
 3. Open **Edit code**, delete the template, and paste the whole of
-   [`dist/worker.js`](dist/worker.js). On a public repository you can copy it
-   from the `raw.githubusercontent.com` URL without signing in to GitHub.
+   [`dist/worker.min.js`](dist/worker.min.js). On a public repository you can
+   copy it from the `raw.githubusercontent.com` URL without signing in to
+   GitHub.
+
+   Use the **minified** file for this, not `dist/worker.js`. A paste that loses
+   its line breaks would turn the readable bundle into a single comment and
+   deploy a Worker that does nothing; the minified build has no line comments
+   and survives, which the build verifies on every run.
 4. **Deploy**.
 5. Settings → **Bindings** → Add → **D1 database**, variable name `DB`, pointing
    at `berkhamsted-reading-signature`.

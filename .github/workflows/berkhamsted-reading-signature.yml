@@ -75,9 +75,9 @@ jobs:
       # stale, so fail rather than ship yesterday's code.
       - name: Check the committed build output is up to date
         run: |
-          if ! git diff --quiet -- dist/worker.js src/worker/assets.generated.ts; then
+          if ! git diff --quiet -- dist/worker.js dist/worker.min.js src/worker/assets.generated.ts; then
             echo "::error::Build output is out of date. Run 'npm run build' and commit the result."
-            git diff --stat -- dist/worker.js src/worker/assets.generated.ts
+            git diff --stat -- dist/worker.js dist/worker.min.js src/worker/assets.generated.ts
             exit 1
           fi
           echo "Committed build output matches the source."

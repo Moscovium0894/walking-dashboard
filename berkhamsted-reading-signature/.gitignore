@@ -11,3 +11,4 @@ node_modules/
 # integration. Everything else under dist/ is build noise.
 dist/*
 !dist/worker.js
+!dist/worker.min.js
