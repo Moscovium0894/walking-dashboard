@@ -10,6 +10,9 @@
 import { normaliseWhitespace, safeHttpUrl } from '../shared/sanitize';
 import { InvalidDateOfBirthError, calculateSchoolYear } from '../shared/schoolYear';
 import type { Book, Profile } from '../shared/types';
+import { isReservedSlug } from './routes';
+
+export { isReservedSlug } from './routes';
 
 export interface ValidationResult<T> {
   ok: boolean;
@@ -251,13 +254,6 @@ export interface RegistrationInput {
   dateOfBirth: string;
 }
 
-/** Path segments that must never become a person's signature address. */
-const RESERVED_SLUGS = new Set([
-  'admin', 'api', 'assets', 'signature', 'login', 'logout', 'register',
-  'signup', 'static', 'js', 'css', 'robots', 'favicon', 'well-known', 'new',
-  'account', 'settings', 'help', 'about', 'support', 'root', 'system',
-]);
-
 /** Turn a username into a candidate URL slug. */
 export function slugify(value: string): string {
   return value
@@ -265,10 +261,6 @@ export function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 32);
-}
-
-export function isReservedSlug(slug: string): boolean {
-  return RESERVED_SLUGS.has(slug);
 }
 
 /**

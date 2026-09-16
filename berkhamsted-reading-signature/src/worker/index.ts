@@ -4,11 +4,14 @@
  * The route table is the security boundary, so it is explicit rather than
  * pattern-driven. Two rules hold everywhere:
  *
- *  1. Everything under /admin requires a session, and the acting user is read
- *     from that session row. No route takes a user id from the request, so
- *     there is no parameter an attacker could change to act as someone else.
- *  2. Everything under /signature is public and read-only. It resolves a user
- *     from the slug in the path, and can only ever read.
+ *  1. Every page except the sign-in and registration forms requires a session,
+ *     and the acting user is read from that session row. No route takes a user
+ *     id from the request, so there is no parameter an attacker could change to
+ *     act as someone else.
+ *  2. /signature/<account> is public and read-only. It resolves a user from the
+ *     slug in the path, and can only ever read.
+ *
+ * The scheme itself lives in routes.ts.
  */
 
 import { fetchCover, searchBooks } from './books';
@@ -47,6 +50,7 @@ import {
   type User,
 } from './db';
 import { readConfig, type Env } from './env';
+import { ROUTES, isPrivatePath } from './routes';
 import {
   LOGIN_RULE,
   MUTATION_RULE,
@@ -184,6 +188,9 @@ async function handleSignature(request: Request, env: Env, url: URL): Promise<Re
   const segments = url.pathname.split('/').filter((part) => part !== '');
   if (segments[0] !== 'signature') return null;
 
+  // Bare /signature is the signed-in page, not somebody's signature.
+  if (segments.length === 1) return null;
+
   const slugSegment = segments[1] ?? '';
   const slug = slugSegment.replace(/\.(txt|png)$/, '');
   if (slug === '') return notFound();
@@ -268,7 +275,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   const config = readConfig(env);
 
   if (request.method === 'GET') {
-    if ((await getSession(env, request)) !== null) return redirect('/admin');
+    if ((await getSession(env, request)) !== null) return redirect('/');
     return adminHtml(registerPage({ signupRestricted: config.signupRestricted, errors: {} }));
   }
 
@@ -333,7 +340,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   }
 
   const session = await createSession(env, userId);
-  const headers = new Headers({ Location: '/admin?ok=registered' });
+  const headers = new Headers({ Location: '/?ok=registered' });
   for (const cookie of sessionCookieHeaders(session)) headers.append('Set-Cookie', cookie);
   return new Response(null, { status: 303, headers });
 }
@@ -342,7 +349,7 @@ async function handleLogin(request: Request, env: Env, url: URL): Promise<Respon
   const config = readConfig(env);
 
   if (request.method === 'GET') {
-    if ((await getSession(env, request)) !== null) return redirect('/admin');
+    if ((await getSession(env, request)) !== null) return redirect('/');
     return adminHtml(
       loginPage({
         signupRestricted: config.signupRestricted,
@@ -383,7 +390,7 @@ async function handleLogin(request: Request, env: Env, url: URL): Promise<Respon
   await reset(env, 'login', identifier);
   const session = await createSession(env, userId);
 
-  const headers = new Headers({ Location: '/admin' });
+  const headers = new Headers({ Location: '/' });
   for (const cookie of sessionCookieHeaders(session)) headers.append('Set-Cookie', cookie);
   return new Response(null, { status: 303, headers });
 }
@@ -401,9 +408,9 @@ async function handleAdmin(
   const method = request.method;
   const csrfToken = readCookie(request, CSRF_COOKIE) ?? '';
 
-  if (path === '/admin/logout' && method === 'POST') {
+  if (path === ROUTES.logout && method === 'POST') {
     await destroySession(env, session.token);
-    const headers = new Headers({ Location: '/admin/login?ok=signed-out' });
+    const headers = new Headers({ Location: '/?ok=signed-out' });
     for (const cookie of clearedCookieHeaders()) headers.append('Set-Cookie', cookie);
     return new Response(null, { status: 303, headers });
   }
@@ -440,7 +447,7 @@ async function handleAdmin(
     };
   };
 
-  if (path === '/admin' && method === 'GET') {
+  if (path === ROUTES.home && method === 'GET') {
     const c = await context();
     return adminHtml(
       dashboardPage({
@@ -454,7 +461,7 @@ async function handleAdmin(
     );
   }
 
-  if (path === '/admin/signature' && method === 'GET') {
+  if (path === ROUTES.signature && method === 'GET') {
     const c = await context();
     return adminHtml(
       signaturePage({
@@ -474,7 +481,7 @@ async function handleAdmin(
     );
   }
 
-  if (path === '/admin/signature/image' && method === 'POST') {
+  if (path === ROUTES.signature && method === 'POST') {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -508,7 +515,7 @@ async function handleAdmin(
     return json({ ok: true });
   }
 
-  if (path === '/admin/book') {
+  if (path === ROUTES.book) {
     if (method === 'GET') {
       const rawQuery = url.searchParams.get('q');
       const current = await getCurrentBook(env, user.id);
@@ -607,14 +614,14 @@ async function handleAdmin(
       await bumpRevision(env, user.id);
       // Straight to the signature page, which redraws the image immediately.
       return redirect(
-        coverFailed ? '/admin/signature?error=cover-failed' : '/admin/signature?ok=book-set',
+        coverFailed ? `${ROUTES.signature}?error=cover-failed` : `${ROUTES.signature}?ok=book-set`,
       );
     }
 
     return notFound();
   }
 
-  if (path === '/admin/profile') {
+  if (path === ROUTES.profile) {
     const renderProfile = async (
       errors: Record<string, string>,
       message?: string,
@@ -648,13 +655,13 @@ async function handleAdmin(
       }
 
       await updateProfile(env, user.id, validated.value);
-      return redirect('/admin/profile?ok=profile-saved');
+      return redirect(`${ROUTES.profile}?ok=profile-saved`);
     }
 
     return notFound();
   }
 
-  if (path === '/admin/logo' && method === 'POST') {
+  if (path === ROUTES.logo && method === 'POST') {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -710,10 +717,10 @@ async function handleAdmin(
     }
 
     await bumpRevision(env, user.id);
-    return redirect('/admin/profile?ok=logo-saved');
+    return redirect(`${ROUTES.profile}?ok=logo-saved`);
   }
 
-  if (path === '/admin/logo/delete' && method === 'POST') {
+  if (path === ROUTES.logoDelete && method === 'POST') {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -723,26 +730,26 @@ async function handleAdmin(
       deleteImage(env, user.id, 'logo-original'),
     ]);
     await bumpRevision(env, user.id);
-    return redirect('/admin/profile?ok=logo-removed');
+    return redirect(`${ROUTES.profile}?ok=logo-removed`);
   }
 
   // Authenticated previews. Always the signed-in user's own images: the key is
   // chosen from a fixed map and the user id comes from the session.
-  const ADMIN_IMAGES: Record<string, ImageKey> = {
-    '/admin/image/cover': 'cover',
-    '/admin/image/logo': 'logo',
-    '/admin/image/logo-original': 'logo-original',
-    '/admin/image/signature': 'signature',
+  const PRIVATE_IMAGES: Record<string, ImageKey> = {
+    '/images/cover': 'cover',
+    '/images/logo': 'logo',
+    '/images/logo-original': 'logo-original',
+    '/images/signature': 'signature',
   };
 
-  if (path in ADMIN_IMAGES) {
-    const key = ADMIN_IMAGES[path] as ImageKey;
+  if (path in PRIVATE_IMAGES) {
+    const key = PRIVATE_IMAGES[path] as ImageKey;
     const image = await getImage(env, user.id, key);
     const headers = { 'Cross-Origin-Resource-Policy': 'same-origin' };
     return image === null ? emptyImage(headers) : imageResponse(image, request, headers);
   }
 
-  if (path === '/admin/thumb' && method === 'GET') {
+  if (path === ROUTES.thumb && method === 'GET') {
     const target = url.searchParams.get('url') ?? '';
     let parsed: URL;
     try {
@@ -792,40 +799,43 @@ export default {
       }
 
       // Static and identical for everyone, so they need no session.
-      if (url.pathname === '/admin/js/cropper.js') return scriptResponse(CROPPER_JS);
-      if (url.pathname === '/admin/js/copy.js') return scriptResponse(COPY_JS);
-      if (url.pathname === '/admin/js/signature-image.js') return scriptResponse(SIGNATURE_IMAGE_JS);
+      if (url.pathname === '/js/cropper.js') return scriptResponse(CROPPER_JS);
+      if (url.pathname === '/js/copy.js') return scriptResponse(COPY_JS);
+      if (url.pathname === '/js/signature-image.js') return scriptResponse(SIGNATURE_IMAGE_JS);
 
-      if (url.pathname === '/robots.txt') {
+      if (url.pathname === ROUTES.robots) {
         return new Response('User-agent: *\nDisallow: /\n', {
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         });
       }
 
-      if (url.pathname === '/') return redirect('/admin');
+      ctx.waitUntil(purgeExpired(env));
 
-      if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-        ctx.waitUntil(purgeExpired(env));
+      if (url.pathname === ROUTES.register) return await handleRegister(request, env);
 
-        if (url.pathname === '/admin/register') return await handleRegister(request, env);
-        if (url.pathname === '/admin/login') return await handleLogin(request, env, url);
+      const session = await getSession(env, request);
 
-        const session = await getSession(env, request);
-        if (session === null) return redirect('/admin/login');
-
-        // Identity comes from the session row and nowhere else.
-        const user = await getUserById(env, session.userId);
-        if (user === null) {
-          // The account was removed while the session lived on.
-          await destroySession(env, session.token);
-          const headers = new Headers({ Location: '/admin/login' });
-          for (const cookie of clearedCookieHeaders()) headers.append('Set-Cookie', cookie);
-          return new Response(null, { status: 303, headers });
-        }
-
-        return await handleAdmin(request, env, url, session, user);
+      // `/` is the sign-in page when signed out and the dashboard when signed
+      // in, so there is no separate login URL to remember.
+      if (session === null) {
+        if (url.pathname === ROUTES.home) return await handleLogin(request, env, url);
+        // A known private page sends them to sign in; anything else genuinely
+        // does not exist, and should say so rather than bouncing every typo to
+        // the sign-in form.
+        return isPrivatePath(url.pathname) ? redirect(ROUTES.home) : notFound();
       }
 
+      // Identity comes from the session row and nowhere else.
+      const user = await getUserById(env, session.userId);
+      if (user === null) {
+        // The account was removed while the session lived on.
+        await destroySession(env, session.token);
+        const headers = new Headers({ Location: ROUTES.home });
+        for (const cookie of clearedCookieHeaders()) headers.append('Set-Cookie', cookie);
+        return new Response(null, { status: 303, headers });
+      }
+
+      return await handleAdmin(request, env, url, session, user);
       return notFound();
     } catch (error) {
       // Never leak an internal error to the client. Detail goes to the Workers

@@ -79,16 +79,25 @@ Email client ──▶ /signature/otto/cover.jpg   (bytes served from D1, never 
 | Path | Access | Purpose |
 |---|---|---|
 | `/signature/otto.png` | public | **the signature as one image — what email points at** |
-| `/signature/otto` | public | the signature as an HTML document |
+| `/signature/otto` | public | the signature as a web page |
+| `/signature/otto.txt` | public | plain-text fallback |
+| `/signature/otto/logo.png`, `/cover.jpg` | public | its images |
+| `/assets/*.png` | public | fixed site branding, embedded in the build |
+| `/js/*.js` | public | the progressive-enhancement scripts |
+| `/` | private | sign in when signed out, dashboard when signed in |
+| `/register` | public | create an account |
+| `/book` | private | search and change book |
+| `/profile` | private | profile and logo |
+| `/signature` | private | your snippet; also receives the rendered image |
 | `/signature/otto.txt` | public | plain-text fallback |
 | `/signature/otto/logo.png` | public | the signature logo, uploaded or default |
 | `/assets/*.png` | public | fixed site branding, embedded in the build |
 | `/signature/otto/cover.jpg` | public | the current cover, from D1 |
-| `/admin/js/*.js` | public | the two progressive-enhancement scripts |
-| `/admin` | private | dashboard |
-| `/admin/book` | private | search and change book |
-| `/admin/profile` | private | profile and logo |
-| `/admin/signature` | private | preview and copy HTML |
+| `//js/*.js` | public | the two progressive-enhancement scripts |
+| `/` | private | dashboard |
+| `/book` | private | search and change book |
+| `/profile` | private | profile and logo |
+| `/signature` | private | preview and copy HTML |
 
 The admin interface is **server-rendered HTML forms**. There is no client-side
 framework. That is a deliberate choice: it keeps every credential and every
@@ -354,7 +363,7 @@ uploads the file, uncropped.
 
 ## 9. Signing in
 
-Go to `/admin`. You will be redirected to `/admin/login`.
+Go to `/`. You will be redirected to `/`.
 
 There is **no registration**. There is exactly one administrator, whose
 credentials come from the Worker secrets. There is no password reset: if you
@@ -500,7 +509,7 @@ on secrets and rate limits, never on obscurity.
 - Cookies use the `__Host-` prefix with `HttpOnly`, `Secure`, `SameSite=Lax`.
 
 **Authorisation**
-- Every route under `/admin` requires a session. Everything under `/signature`
+- Every route under `/` requires a session. Everything under `/signature`
   is read-only. There is no route that writes to the database without both a
   session and a CSRF token.
 

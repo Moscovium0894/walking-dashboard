@@ -52,7 +52,7 @@ export function loginPage(options: LoginPageOptions): string {
     ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ''}
     <div class="panel">
       <h2>Sign in</h2>
-      <form method="post" action="/admin/login">
+      <form method="post" action="/">
         <div class="field">
           <label for="username">Username</label>
           <input type="text" id="username" name="username" autocomplete="username" required autofocus />
@@ -65,7 +65,7 @@ export function loginPage(options: LoginPageOptions): string {
       </form>
     </div>
     <p style="text-align:center;font-size:0.9rem;">
-      No account yet? <a href="/admin/register">Create one</a>${
+      No account yet? <a href="/register">Create one</a>${
         options.signupRestricted ? ' — you will need an invitation code.' : '.'
       }
     </p>
@@ -101,7 +101,7 @@ export function registerPage(options: RegisterPageOptions): string {
         Your signature is yours alone. Nobody else can change it, and you cannot change anyone
         else's.
       </p>
-      <form method="post" action="/admin/register">
+      <form method="post" action="/register">
         ${
           options.signupRestricted
             ? `<div class="field">
@@ -153,7 +153,7 @@ export function registerPage(options: RegisterPageOptions): string {
       </form>
     </div>
     <p style="text-align:center;font-size:0.9rem;">
-      Already have an account? <a href="/admin/login">Sign in</a>.
+      Already have an account? <a href="/">Sign in</a>.
     </p>
     <p style="text-align:center;font-size:0.78rem;color:var(--muted);">
       There is no password reset. If you lose your password the account cannot be recovered.
@@ -186,7 +186,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
 
   const coverBlock = book
     ? options.signatureOptions.hasCover
-      ? `<img src="/admin/image/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />`
+      ? `<img src="/images/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />`
       : '<div class="no-cover">No cover<br />stored</div>'
     : '<div class="no-cover">No book<br />set</div>';
 
@@ -233,7 +233,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
             : '<p style="color:var(--muted);">No book is set yet. The signature will omit the reading section until you choose one.</p>'
         }
         <div class="actions">
-          <a class="btn small" href="/admin/book">${book ? 'Change book' : 'Choose a book'}</a>
+          <a class="btn small" href="/book">${book ? 'Change book' : 'Choose a book'}</a>
         </div>
       </div>
     </div>
@@ -243,7 +243,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
     <h2>Signature preview</h2>
     ${renderSignatureHtml(data, options.signatureOptions)}
     <div class="actions">
-      <a class="btn small" href="/admin/signature">Get the signature</a>
+      <a class="btn small" href="/signature">Get the signature</a>
       <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
     </div>
   </div>
@@ -285,7 +285,7 @@ function resultItem(result: BookSearchResult, csrfToken: string): string {
   // `img-src 'self'` policy and no request leaks to a third party from here.
   const cover =
     result.coverUrl !== null
-      ? `<img src="/admin/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />`
+      ? `<img src="/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />`
       : '<div class="no-cover">NO COVER</div>';
 
   const meta = [
@@ -303,7 +303,7 @@ function resultItem(result: BookSearchResult, csrfToken: string): string {
   <div class="result-body">
     <div class="result-title">${escapeHtml(result.title)}</div>
     <div class="result-meta">${escapeHtml(meta)}</div>
-    <form method="post" action="/admin/book">
+    <form method="post" action="/book">
       ${csrfField(csrfToken)}
       <input type="hidden" name="action" value="select" />
       <input type="hidden" name="title" value="${escapeHtml(result.title)}" />
@@ -354,7 +354,7 @@ ${
 
 <div class="panel">
   <h2>Search</h2>
-  <form method="get" action="/admin/book" role="search">
+  <form method="get" action="/book" role="search">
     <div class="field">
       <label for="q">Title, author or ISBN</label>
       <input type="search" id="q" name="q" value="${escapeHtml(options.query)}"
@@ -373,7 +373,7 @@ ${
   <p style="color:var(--muted);font-size:0.9rem;">
     Use this when the search cannot find your book, or when you want to correct its details.
   </p>
-  <form method="post" action="/admin/book">
+  <form method="post" action="/book">
     ${csrfField(csrfToken)}
     <input type="hidden" name="action" value="manual" />
     <div class="grid two">
@@ -462,7 +462,7 @@ export function profilePage(options: ProfilePageOptions): string {
 
 <div class="panel">
   <h2>Details</h2>
-  <form method="post" action="/admin/profile">
+  <form method="post" action="/profile">
     ${csrfField(csrfToken)}
     <div class="grid two">
       <div class="field">
@@ -531,7 +531,7 @@ export function profilePage(options: ProfilePageOptions): string {
     <div class="surface">
       <img src="${
         options.hasLogo
-          ? `/admin/image/logo?v=${options.data.revision}`
+          ? `/images/logo?v=${options.data.revision}`
           : escapeHtml(SITE_LOGO)
       }" alt="Logo used in the signature" />
     </div>
@@ -542,13 +542,13 @@ export function profilePage(options: ProfilePageOptions): string {
       options.hasOriginal
         ? `<div class="actions" style="margin-top:0.75rem;">
              <button class="btn secondary small" type="button" id="crop-recrop"
-                     data-src="/admin/image/logo-original?v=${options.data.revision}">Re-crop</button>
+                     data-src="/images/logo-original?v=${options.data.revision}">Re-crop</button>
            </div>`
         : ''
     }
   </div>
 
-  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
+  <form method="post" action="/profile/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
     ${csrfField(csrfToken)}
     <div class="field">
       <label for="logo-file">Upload a different logo</label>
@@ -600,7 +600,7 @@ export function profilePage(options: ProfilePageOptions): string {
 
   ${
     options.hasLogo
-      ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
+      ? `<form method="post" action="/profile/logo/delete" style="margin-top:1rem;">
            ${csrfField(csrfToken)}
            <button class="btn secondary small" type="submit">Revert to the default crest</button>
          </form>`
@@ -612,7 +612,7 @@ export function profilePage(options: ProfilePageOptions): string {
     title: 'Profile',
     active: 'profile',
     username: options.username,
-    scripts: ['/admin/js/cropper.js'],
+    scripts: ['/js/cropper.js'],
     notice: options.notice ?? null,
     error: options.error ?? null,
   });
@@ -650,11 +650,11 @@ function signatureRenderPayload(options: SignaturePageOptions): string {
     school: data.profile.showSchool ? data.profile.school : '',
     subtitle: data.profile.showSubtitle ? data.profile.subtitle : '',
     // The public logo route, not the admin one: it falls back to the built-in
-    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
+    // crest when nothing has been uploaded, whereas /images/logo returns a
     // transparent pixel that the canvas would scale into an empty band.
     logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
     coverUrl: options.signatureOptions.hasCover
-      ? `/admin/image/cover?v=${data.revision}`
+      ? `/images/cover?v=${data.revision}`
       : null,
     book: data.book ? { title: data.book.title, author: data.book.author } : null,
     colours: {
@@ -819,6 +819,6 @@ export function signaturePage(options: SignaturePageOptions): string {
     title: 'Signature',
     active: 'signature',
     notice: options.notice ?? null,
-    scripts: ['/admin/js/copy.js', '/admin/js/signature-image.js'],
+    scripts: ['/js/copy.js', '/js/signature-image.js'],
   });
 }

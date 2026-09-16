@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isReservedSlug, slugify, validateRegistration } from '../src/worker/validate';
+import { ROUTES, ROUTE_PREFIXES } from '../src/worker/routes';
 
 /** Build a registration form with sensible defaults. */
 function form(overrides: Record<string, string> = {}): FormData {
@@ -83,13 +84,27 @@ describe('signature addresses', () => {
     expect(slugify('x'.repeat(100))).toHaveLength(32);
   });
 
-  it.each(['admin', 'api', 'assets', 'signature', 'login', 'register', 'robots'])(
+  it.each(['admin', 'api', 'assets', 'signature', 'login', 'register', 'berkhamsted', 'official'])(
     'refuses the reserved address %j',
     (slug) => {
       expect(isReservedSlug(slug)).toBe(true);
       expect(validateRegistration(form({ slug })).errors.slug).toMatch(/reserved/i);
     },
   );
+
+  it('reserves the first segment of every application route', () => {
+    // Account names are namespaced under /signature/, so this is belt and
+    // braces rather than load-bearing - but if the scheme is ever flattened,
+    // this test fails before a name can shadow a page.
+    for (const route of Object.values(ROUTES)) {
+      const segment = route.split('/')[1] ?? '';
+      if (segment === '' || segment.includes('.')) continue;
+      expect(isReservedSlug(segment), `route ${route} is not reserved`).toBe(true);
+    }
+    for (const prefix of ROUTE_PREFIXES) {
+      expect(isReservedSlug(prefix.split('/')[1] ?? ''), `prefix ${prefix}`).toBe(true);
+    }
+  });
 
   it('refuses an address that collapses to nothing', () => {
     expect(validateRegistration(form({ username: 'abc', slug: '!!!' })).errors.slug).toBeDefined();

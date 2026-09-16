@@ -24,17 +24,17 @@ export interface LayoutOptions {
   error?: string | null;
   /** Omits the navigation, for the login page. */
   chromeless?: boolean;
-  /** Client scripts to load, e.g. ['/admin/js/cropper.js']. */
+  /** Client scripts to load, e.g. ['/js/cropper.js']. */
   scripts?: string[];
   /** Signed-in username, shown beside the sign-out button. */
   username?: string | null;
 }
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; href: string; label: string }> = [
-  { key: 'dashboard', href: '/admin', label: 'Dashboard' },
-  { key: 'book', href: '/admin/book', label: 'Change book' },
-  { key: 'profile', href: '/admin/profile', label: 'Profile' },
-  { key: 'signature', href: '/admin/signature', label: 'Signature' },
+  { key: 'dashboard', href: '/', label: 'Dashboard' },
+  { key: 'book', href: '/book', label: 'Change book' },
+  { key: 'profile', href: '/profile', label: 'Profile' },
+  { key: 'signature', href: '/signature', label: 'Signature' },
 ];
 
 /**
@@ -309,7 +309,7 @@ dl.summary dd { margin: 0; color: var(--ink); }
  * crest because the rose is illegible at 44px tall.
  */
 function brandMark(): string {
-  return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+  return `<a href="/" aria-label="Berkhamsted reading signature, dashboard">
         <img class="masthead-logo" src="${SITE_WORDMARK}" alt="Berkhamsted" />
       </a>`;
 }
@@ -347,7 +347,7 @@ export function layout(body: string, options: LayoutOptions): string {
             ? `<span class="masthead-user">${escapeHtml(options.username)}</span>`
             : ''
         }
-        <form method="post" action="/admin/logout">
+        <form method="post" action="/profile/logout">
           <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
         </form>
       </div>

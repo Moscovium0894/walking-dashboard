@@ -10,7 +10,7 @@
  * Headers applied to every admin response.
  *
  * The CSP is strict and needs no hashes or 'unsafe-inline' for scripts: the
- * admin pages load their two small scripts from /admin/js/, so a plain
+ * the signed-in pages load their small scripts from /js/, so a plain
  * `script-src 'self'` covers them. blob: is allowed for images because the
  * logo cropper previews a locally selected file before it is uploaded.
  */

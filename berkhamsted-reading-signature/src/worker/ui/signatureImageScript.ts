@@ -244,7 +244,7 @@ export const SIGNATURE_IMAGE_JS = `(function () {
     form.append('height', String(result.height));
     form.append('image', result.blob, 'signature.png');
 
-    return fetch('/admin/signature/image', {
+    return fetch('/signature', {
       method: 'POST',
       body: form,
       credentials: 'same-origin',

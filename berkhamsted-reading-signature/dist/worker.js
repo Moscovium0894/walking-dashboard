@@ -671,6 +671,83 @@ function decodeAsset(name) {
   return bytes.buffer;
 }
 
+// src/worker/routes.ts
+var ROUTES = {
+  home: "/",
+  register: "/register",
+  logout: "/logout",
+  book: "/book",
+  profile: "/profile",
+  logo: "/profile/logo",
+  logoDelete: "/profile/logo/delete",
+  signature: "/signature",
+  thumb: "/thumb",
+  robots: "/robots.txt"
+};
+var RESERVED_SLUGS = /* @__PURE__ */ new Set([
+  "about",
+  "account",
+  "admin",
+  "administrator",
+  "api",
+  "assets",
+  "auth",
+  "berkhamsted",
+  "book",
+  "books",
+  "contact",
+  "css",
+  "dashboard",
+  "docs",
+  "help",
+  "home",
+  "images",
+  "img",
+  "index",
+  "js",
+  "login",
+  "logout",
+  "mail",
+  "me",
+  "new",
+  "null",
+  "official",
+  "owner",
+  "password",
+  "privacy",
+  "profile",
+  "register",
+  "root",
+  "security",
+  "settings",
+  "signature",
+  "signin",
+  "signout",
+  "signup",
+  "staff",
+  "static",
+  "support",
+  "system",
+  "terms",
+  "test",
+  "thumb",
+  "undefined",
+  "user",
+  "users",
+  "www"
+]);
+function isReservedSlug(slug) {
+  return RESERVED_SLUGS.has(slug);
+}
+function isPrivatePath(pathname) {
+  if (pathname === ROUTES.home) return true;
+  if (pathname === ROUTES.signature) return true;
+  for (const route of [ROUTES.logout, ROUTES.book, ROUTES.profile, ROUTES.logo, ROUTES.logoDelete, ROUTES.thumb]) {
+    if (pathname === route) return true;
+  }
+  return pathname.startsWith("/images/");
+}
+
 // src/worker/rateLimit.ts
 var LOGIN_RULE = { limit: 5, windowSeconds: 15 * 60 };
 var MUTATION_RULE = { limit: 60, windowSeconds: 60 };
@@ -1319,7 +1396,7 @@ var CROPPER_JS = `(function () {
       })
       .then(function (response) {
         if (!response.ok && response.status !== 0) throw new Error('upload failed');
-        window.location.href = '/admin/profile?ok=logo-saved';
+        window.location.href = '/profile?ok=logo-saved';
       })
       .catch(function () {
         if (saveBtn) saveBtn.disabled = false;
@@ -1550,7 +1627,7 @@ var SIGNATURE_IMAGE_JS = `(function () {
     form.append('height', String(result.height));
     form.append('image', result.blob, 'signature.png');
 
-    return fetch('/admin/signature/image', {
+    return fetch('/signature', {
       method: 'POST',
       body: form,
       credentials: 'same-origin',
@@ -1594,10 +1671,10 @@ var SIGNATURE_IMAGE_JS = `(function () {
 var SITE_LOGO = "/assets/berkhamsted-logo.png";
 var SITE_WORDMARK = "/assets/berkhamsted-wordmark.png";
 var NAV_ITEMS = [
-  { key: "dashboard", href: "/admin", label: "Dashboard" },
-  { key: "book", href: "/admin/book", label: "Change book" },
-  { key: "profile", href: "/admin/profile", label: "Profile" },
-  { key: "signature", href: "/admin/signature", label: "Signature" }
+  { key: "dashboard", href: "/", label: "Dashboard" },
+  { key: "book", href: "/book", label: "Change book" },
+  { key: "profile", href: "/profile", label: "Profile" },
+  { key: "signature", href: "/signature", label: "Signature" }
 ];
 function styles() {
   return `
@@ -1856,7 +1933,7 @@ dl.summary dd { margin: 0; color: var(--ink); }
 `.trim();
 }
 function brandMark() {
-  return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+  return `<a href="/" aria-label="Berkhamsted reading signature, dashboard">
         <img class="masthead-logo" src="${SITE_WORDMARK}" alt="Berkhamsted" />
       </a>`;
 }
@@ -1877,7 +1954,7 @@ function layout(body, options) {
       ${brandMark()}
       <div class="masthead-account">
         ${options.username ? `<span class="masthead-user">${escapeHtml(options.username)}</span>` : ""}
-        <form method="post" action="/admin/logout">
+        <form method="post" action="/profile/logout">
           <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
         </form>
       </div>
@@ -1923,7 +2000,7 @@ function loginPage(options) {
     ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""}
     <div class="panel">
       <h2>Sign in</h2>
-      <form method="post" action="/admin/login">
+      <form method="post" action="/">
         <div class="field">
           <label for="username">Username</label>
           <input type="text" id="username" name="username" autocomplete="username" required autofocus />
@@ -1936,7 +2013,7 @@ function loginPage(options) {
       </form>
     </div>
     <p style="text-align:center;font-size:0.9rem;">
-      No account yet? <a href="/admin/register">Create one</a>${options.signupRestricted ? " \u2014 you will need an invitation code." : "."}
+      No account yet? <a href="/register">Create one</a>${options.signupRestricted ? " \u2014 you will need an invitation code." : "."}
     </p>
   </div>
 </div>`;
@@ -1957,7 +2034,7 @@ function registerPage(options) {
         Your signature is yours alone. Nobody else can change it, and you cannot change anyone
         else's.
       </p>
-      <form method="post" action="/admin/register">
+      <form method="post" action="/register">
         ${options.signupRestricted ? `<div class="field">
                  <label for="code">Invitation code</label>
                  <input type="text" id="code" name="code" required${invalidAttr(errors, "code")} />
@@ -2005,7 +2082,7 @@ function registerPage(options) {
       </form>
     </div>
     <p style="text-align:center;font-size:0.9rem;">
-      Already have an account? <a href="/admin/login">Sign in</a>.
+      Already have an account? <a href="/">Sign in</a>.
     </p>
     <p style="text-align:center;font-size:0.78rem;color:var(--muted);">
       There is no password reset. If you lose your password the account cannot be recovered.
@@ -2018,7 +2095,7 @@ function dashboardPage(options) {
   const { data, publicUrl } = options;
   const { profile, book, year } = data;
   const yearNote = year.status === "at-school" ? `Academic year ${escapeHtml(year.academicYearLabel)}` : "Outside school years";
-  const coverBlock = book ? options.signatureOptions.hasCover ? `<img src="/admin/image/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />` : '<div class="no-cover">No cover<br />stored</div>' : '<div class="no-cover">No book<br />set</div>';
+  const coverBlock = book ? options.signatureOptions.hasCover ? `<img src="/images/cover?v=${data.revision}" alt="Cover of ${escapeHtml(book.title)}" />` : '<div class="no-cover">No cover<br />stored</div>' : '<div class="no-cover">No book<br />set</div>';
   const body = `
 <div class="page-head">
   <h1>Dashboard</h1>
@@ -2058,7 +2135,7 @@ function dashboardPage(options) {
                  ${book.isbn ? `<dd style="color:var(--muted);font-size:0.85rem;">ISBN ${escapeHtml(book.isbn)}</dd>` : ""}
                </dl>` : '<p style="color:var(--muted);">No book is set yet. The signature will omit the reading section until you choose one.</p>'}
         <div class="actions">
-          <a class="btn small" href="/admin/book">${book ? "Change book" : "Choose a book"}</a>
+          <a class="btn small" href="/book">${book ? "Change book" : "Choose a book"}</a>
         </div>
       </div>
     </div>
@@ -2068,7 +2145,7 @@ function dashboardPage(options) {
     <h2>Signature preview</h2>
     ${renderSignatureHtml(data, options.signatureOptions)}
     <div class="actions">
-      <a class="btn small" href="/admin/signature">Get the signature</a>
+      <a class="btn small" href="/signature">Get the signature</a>
       <a class="btn small secondary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noopener">Open public URL</a>
     </div>
   </div>
@@ -2090,7 +2167,7 @@ function dashboardPage(options) {
   });
 }
 function resultItem(result, csrfToken) {
-  const cover = result.coverUrl !== null ? `<img src="/admin/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />` : '<div class="no-cover">NO COVER</div>';
+  const cover = result.coverUrl !== null ? `<img src="/thumb?url=${encodeURIComponent(result.coverUrl)}" alt="" loading="lazy" />` : '<div class="no-cover">NO COVER</div>';
   const meta = [
     result.author || "Author unknown",
     result.publicationYear !== null ? String(result.publicationYear) : null,
@@ -2101,7 +2178,7 @@ function resultItem(result, csrfToken) {
   <div class="result-body">
     <div class="result-title">${escapeHtml(result.title)}</div>
     <div class="result-meta">${escapeHtml(meta)}</div>
-    <form method="post" action="/admin/book">
+    <form method="post" action="/book">
       ${csrfField(csrfToken)}
       <input type="hidden" name="action" value="select" />
       <input type="hidden" name="title" value="${escapeHtml(result.title)}" />
@@ -2136,7 +2213,7 @@ ${options.current ? `<div class="banner info">
 
 <div class="panel">
   <h2>Search</h2>
-  <form method="get" action="/admin/book" role="search">
+  <form method="get" action="/book" role="search">
     <div class="field">
       <label for="q">Title, author or ISBN</label>
       <input type="search" id="q" name="q" value="${escapeHtml(options.query)}"
@@ -2155,7 +2232,7 @@ ${options.current ? `<div class="banner info">
   <p style="color:var(--muted);font-size:0.9rem;">
     Use this when the search cannot find your book, or when you want to correct its details.
   </p>
-  <form method="post" action="/admin/book">
+  <form method="post" action="/book">
     ${csrfField(csrfToken)}
     <input type="hidden" name="action" value="manual" />
     <div class="grid two">
@@ -2220,7 +2297,7 @@ function profilePage(options) {
 
 <div class="panel">
   <h2>Details</h2>
-  <form method="post" action="/admin/profile">
+  <form method="post" action="/profile">
     ${csrfField(csrfToken)}
     <div class="grid two">
       <div class="field">
@@ -2287,18 +2364,18 @@ function profilePage(options) {
   <div class="logo-slot" style="max-width:420px;">
     <h3>Currently used</h3>
     <div class="surface">
-      <img src="${options.hasLogo ? `/admin/image/logo?v=${options.data.revision}` : escapeHtml(SITE_LOGO)}" alt="Logo used in the signature" />
+      <img src="${options.hasLogo ? `/images/logo?v=${options.data.revision}` : escapeHtml(SITE_LOGO)}" alt="Logo used in the signature" />
     </div>
     <p class="hint" style="margin:0;">
       ${options.hasLogo ? "Your uploaded crop." : "The default school crest."}
     </p>
     ${options.hasOriginal ? `<div class="actions" style="margin-top:0.75rem;">
              <button class="btn secondary small" type="button" id="crop-recrop"
-                     data-src="/admin/image/logo-original?v=${options.data.revision}">Re-crop</button>
+                     data-src="/images/logo-original?v=${options.data.revision}">Re-crop</button>
            </div>` : ""}
   </div>
 
-  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
+  <form method="post" action="/profile/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
     ${csrfField(csrfToken)}
     <div class="field">
       <label for="logo-file">Upload a different logo</label>
@@ -2348,7 +2425,7 @@ function profilePage(options) {
     </div>
   </form>
 
-  ${options.hasLogo ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
+  ${options.hasLogo ? `<form method="post" action="/profile/logo/delete" style="margin-top:1rem;">
            ${csrfField(csrfToken)}
            <button class="btn secondary small" type="submit">Revert to the default crest</button>
          </form>` : ""}
@@ -2357,7 +2434,7 @@ function profilePage(options) {
     title: "Profile",
     active: "profile",
     username: options.username,
-    scripts: ["/admin/js/cropper.js"],
+    scripts: ["/js/cropper.js"],
     notice: options.notice ?? null,
     error: options.error ?? null
   });
@@ -2371,10 +2448,10 @@ function signatureRenderPayload(options) {
     school: data.profile.showSchool ? data.profile.school : "",
     subtitle: data.profile.showSubtitle ? data.profile.subtitle : "",
     // The public logo route, not the admin one: it falls back to the built-in
-    // crest when nothing has been uploaded, whereas /admin/image/logo returns a
+    // crest when nothing has been uploaded, whereas /images/logo returns a
     // transparent pixel that the canvas would scale into an empty band.
     logoUrl: `/signature/${options.signatureOptions.slug}/logo.png?v=${data.revision}`,
-    coverUrl: options.signatureOptions.hasCover ? `/admin/image/cover?v=${data.revision}` : null,
+    coverUrl: options.signatureOptions.hasCover ? `/images/cover?v=${data.revision}` : null,
     book: data.book ? { title: data.book.title, author: data.book.author } : null,
     colours: {
       navy: BRAND.navy,
@@ -2498,7 +2575,7 @@ function signaturePage(options) {
     title: "Signature",
     active: "signature",
     notice: options.notice ?? null,
-    scripts: ["/admin/js/copy.js", "/admin/js/signature-image.js"]
+    scripts: ["/js/copy.js", "/js/signature-image.js"]
   });
 }
 
@@ -2647,35 +2724,8 @@ function detectImageType(bytes) {
   }
   return null;
 }
-var RESERVED_SLUGS = /* @__PURE__ */ new Set([
-  "admin",
-  "api",
-  "assets",
-  "signature",
-  "login",
-  "logout",
-  "register",
-  "signup",
-  "static",
-  "js",
-  "css",
-  "robots",
-  "favicon",
-  "well-known",
-  "new",
-  "account",
-  "settings",
-  "help",
-  "about",
-  "support",
-  "root",
-  "system"
-]);
 function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
-}
-function isReservedSlug(slug) {
-  return RESERVED_SLUGS.has(slug);
 }
 function validateRegistration(form) {
   const errors = {};
@@ -2826,6 +2876,7 @@ function emptyImage(headers) {
 async function handleSignature(request, env, url) {
   const segments = url.pathname.split("/").filter((part) => part !== "");
   if (segments[0] !== "signature") return null;
+  if (segments.length === 1) return null;
   const slugSegment = segments[1] ?? "";
   const slug = slugSegment.replace(/\.(txt|png)$/, "");
   if (slug === "") return notFound();
@@ -2888,7 +2939,7 @@ async function handleSignature(request, env, url) {
 async function handleRegister(request, env) {
   const config = readConfig(env);
   if (request.method === "GET") {
-    if (await getSession(env, request) !== null) return redirect("/admin");
+    if (await getSession(env, request) !== null) return redirect("/");
     return adminHtml(registerPage({ signupRestricted: config.signupRestricted, errors: {} }));
   }
   if (request.method !== "POST") return notFound();
@@ -2938,14 +2989,14 @@ async function handleRegister(request, env) {
     return fail({ username: "That username or web address was just taken. Please try another." });
   }
   const session = await createSession(env, userId);
-  const headers = new Headers({ Location: "/admin?ok=registered" });
+  const headers = new Headers({ Location: "/?ok=registered" });
   for (const cookie of sessionCookieHeaders(session)) headers.append("Set-Cookie", cookie);
   return new Response(null, { status: 303, headers });
 }
 async function handleLogin(request, env, url) {
   const config = readConfig(env);
   if (request.method === "GET") {
-    if (await getSession(env, request) !== null) return redirect("/admin");
+    if (await getSession(env, request) !== null) return redirect("/");
     return adminHtml(
       loginPage({
         signupRestricted: config.signupRestricted,
@@ -2977,7 +3028,7 @@ async function handleLogin(request, env, url) {
   }
   await reset(env, "login", identifier);
   const session = await createSession(env, userId);
-  const headers = new Headers({ Location: "/admin" });
+  const headers = new Headers({ Location: "/" });
   for (const cookie of sessionCookieHeaders(session)) headers.append("Set-Cookie", cookie);
   return new Response(null, { status: 303, headers });
 }
@@ -2985,9 +3036,9 @@ async function handleAdmin(request, env, url, session, user) {
   const path = url.pathname;
   const method = request.method;
   const csrfToken = readCookie(request, CSRF_COOKIE) ?? "";
-  if (path === "/admin/logout" && method === "POST") {
+  if (path === ROUTES.logout && method === "POST") {
     await destroySession(env, session.token);
-    const headers = new Headers({ Location: "/admin/login?ok=signed-out" });
+    const headers = new Headers({ Location: "/?ok=signed-out" });
     for (const cookie of clearedCookieHeaders()) headers.append("Set-Cookie", cookie);
     return new Response(null, { status: 303, headers });
   }
@@ -3016,7 +3067,7 @@ async function handleAdmin(request, env, url, session, user) {
       originalPresent
     };
   };
-  if (path === "/admin" && method === "GET") {
+  if (path === ROUTES.home && method === "GET") {
     const c = await context();
     return adminHtml(
       dashboardPage({
@@ -3029,7 +3080,7 @@ async function handleAdmin(request, env, url, session, user) {
       })
     );
   }
-  if (path === "/admin/signature" && method === "GET") {
+  if (path === ROUTES.signature && method === "GET") {
     const c = await context();
     return adminHtml(
       signaturePage({
@@ -3045,7 +3096,7 @@ async function handleAdmin(request, env, url, session, user) {
       })
     );
   }
-  if (path === "/admin/signature/image" && method === "POST") {
+  if (path === ROUTES.signature && method === "POST") {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -3070,7 +3121,7 @@ async function handleAdmin(request, env, url, session, user) {
     await setSignatureImageState(env, user.id, Number.isFinite(revision) ? revision : 0, width, height);
     return json({ ok: true });
   }
-  if (path === "/admin/book") {
+  if (path === ROUTES.book) {
     if (method === "GET") {
       const rawQuery = url.searchParams.get("q");
       const current = await getCurrentBook(env, user.id);
@@ -3159,12 +3210,12 @@ async function handleAdmin(request, env, url, session, user) {
       }
       await bumpRevision(env, user.id);
       return redirect(
-        coverFailed ? "/admin/signature?error=cover-failed" : "/admin/signature?ok=book-set"
+        coverFailed ? `${ROUTES.signature}?error=cover-failed` : `${ROUTES.signature}?ok=book-set`
       );
     }
     return notFound();
   }
-  if (path === "/admin/profile") {
+  if (path === ROUTES.profile) {
     const renderProfile = async (errors, message) => {
       const c = await context();
       return adminHtml(
@@ -3191,11 +3242,11 @@ async function handleAdmin(request, env, url, session, user) {
         return renderProfile(validated.errors, "Please correct the highlighted fields.");
       }
       await updateProfile(env, user.id, validated.value);
-      return redirect("/admin/profile?ok=profile-saved");
+      return redirect(`${ROUTES.profile}?ok=profile-saved`);
     }
     return notFound();
   }
-  if (path === "/admin/logo" && method === "POST") {
+  if (path === ROUTES.logo && method === "POST") {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -3247,9 +3298,9 @@ async function handleAdmin(request, env, url, session, user) {
       );
     }
     await bumpRevision(env, user.id);
-    return redirect("/admin/profile?ok=logo-saved");
+    return redirect(`${ROUTES.profile}?ok=logo-saved`);
   }
-  if (path === "/admin/logo/delete" && method === "POST") {
+  if (path === ROUTES.logoDelete && method === "POST") {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
@@ -3258,21 +3309,21 @@ async function handleAdmin(request, env, url, session, user) {
       deleteImage(env, user.id, "logo-original")
     ]);
     await bumpRevision(env, user.id);
-    return redirect("/admin/profile?ok=logo-removed");
+    return redirect(`${ROUTES.profile}?ok=logo-removed`);
   }
-  const ADMIN_IMAGES = {
-    "/admin/image/cover": "cover",
-    "/admin/image/logo": "logo",
-    "/admin/image/logo-original": "logo-original",
-    "/admin/image/signature": "signature"
+  const PRIVATE_IMAGES = {
+    "/images/cover": "cover",
+    "/images/logo": "logo",
+    "/images/logo-original": "logo-original",
+    "/images/signature": "signature"
   };
-  if (path in ADMIN_IMAGES) {
-    const key = ADMIN_IMAGES[path];
+  if (path in PRIVATE_IMAGES) {
+    const key = PRIVATE_IMAGES[path];
     const image = await getImage(env, user.id, key);
     const headers = { "Cross-Origin-Resource-Policy": "same-origin" };
     return image === null ? emptyImage(headers) : imageResponse(image, request, headers);
   }
-  if (path === "/admin/thumb" && method === "GET") {
+  if (path === ROUTES.thumb && method === "GET") {
     const target = url.searchParams.get("url") ?? "";
     let parsed;
     try {
@@ -3311,30 +3362,29 @@ var index_default = {
           }
         });
       }
-      if (url.pathname === "/admin/js/cropper.js") return scriptResponse(CROPPER_JS);
-      if (url.pathname === "/admin/js/copy.js") return scriptResponse(COPY_JS);
-      if (url.pathname === "/admin/js/signature-image.js") return scriptResponse(SIGNATURE_IMAGE_JS);
-      if (url.pathname === "/robots.txt") {
+      if (url.pathname === "/js/cropper.js") return scriptResponse(CROPPER_JS);
+      if (url.pathname === "/js/copy.js") return scriptResponse(COPY_JS);
+      if (url.pathname === "/js/signature-image.js") return scriptResponse(SIGNATURE_IMAGE_JS);
+      if (url.pathname === ROUTES.robots) {
         return new Response("User-agent: *\nDisallow: /\n", {
           headers: { "Content-Type": "text/plain; charset=utf-8" }
         });
       }
-      if (url.pathname === "/") return redirect("/admin");
-      if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-        ctx.waitUntil(purgeExpired(env));
-        if (url.pathname === "/admin/register") return await handleRegister(request, env);
-        if (url.pathname === "/admin/login") return await handleLogin(request, env, url);
-        const session = await getSession(env, request);
-        if (session === null) return redirect("/admin/login");
-        const user = await getUserById(env, session.userId);
-        if (user === null) {
-          await destroySession(env, session.token);
-          const headers = new Headers({ Location: "/admin/login" });
-          for (const cookie of clearedCookieHeaders()) headers.append("Set-Cookie", cookie);
-          return new Response(null, { status: 303, headers });
-        }
-        return await handleAdmin(request, env, url, session, user);
+      ctx.waitUntil(purgeExpired(env));
+      if (url.pathname === ROUTES.register) return await handleRegister(request, env);
+      const session = await getSession(env, request);
+      if (session === null) {
+        if (url.pathname === ROUTES.home) return await handleLogin(request, env, url);
+        return isPrivatePath(url.pathname) ? redirect(ROUTES.home) : notFound();
       }
+      const user = await getUserById(env, session.userId);
+      if (user === null) {
+        await destroySession(env, session.token);
+        const headers = new Headers({ Location: ROUTES.home });
+        for (const cookie of clearedCookieHeaders()) headers.append("Set-Cookie", cookie);
+        return new Response(null, { status: 303, headers });
+      }
+      return await handleAdmin(request, env, url, session, user);
       return notFound();
     } catch (error) {
       console.error("Unhandled error", error);

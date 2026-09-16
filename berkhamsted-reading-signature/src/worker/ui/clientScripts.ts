@@ -1,5 +1,5 @@
 /**
- * Client-side scripts, served as separate files from /admin/js/*.
+ * Client-side scripts, served as separate files from /js/*.
  *
  * Serving them rather than inlining them keeps the admin Content-Security-Policy
  * at a plain `script-src 'self'`, with no hashes to keep in step and no
@@ -384,7 +384,7 @@ export const CROPPER_JS = `(function () {
       })
       .then(function (response) {
         if (!response.ok && response.status !== 0) throw new Error('upload failed');
-        window.location.href = '/admin/profile?ok=logo-saved';
+        window.location.href = '/profile?ok=logo-saved';
       })
       .catch(function () {
         if (saveBtn) saveBtn.disabled = false;
