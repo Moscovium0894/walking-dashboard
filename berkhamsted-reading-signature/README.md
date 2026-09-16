@@ -159,9 +159,11 @@ Then either run the migration with Wrangler:
 npm run db:migrate:remote
 ```
 
-…or, if you have no terminal available, open the database in the dashboard,
-go to the **Console** tab, paste the contents of
-[`migrations/0001_init.sql`](migrations/0001_init.sql) and run it.
+…or, if you have no terminal available, open the database in the dashboard, go
+to the **Console** tab and paste this file, which is the same schema with the
+comments stripped so it works even if the paste loses its line breaks:
+
+<https://raw.githubusercontent.com/Moscovium0894/walking-dashboard/refs/heads/feature/berkhamsted-reading-signature/berkhamsted-reading-signature/docs/d1-console-paste.sql>
 
 The migration creates the tables and seeds the default profile. It does **not**
 store a year group — that is calculated on every read.
@@ -242,14 +244,18 @@ No terminal and no Git integration needed.
 2. Workers & Pages → **Create** → **Workers** → start from the Hello World
    template and name it `berkhamsted-reading-signature`.
 3. Open **Edit code**, delete the template, and paste the whole of
-   [`dist/worker.min.js`](dist/worker.min.js). On a public repository you can
-   copy it from the `raw.githubusercontent.com` URL without signing in to
-   GitHub.
+   `dist/worker.min.js`. The repository is public, so you can copy it straight
+   from GitHub without signing in:
 
-   Use the **minified** file for this, not `dist/worker.js`. A paste that loses
-   its line breaks would turn the readable bundle into a single comment and
-   deploy a Worker that does nothing; the minified build has no line comments
-   and survives, which the build verifies on every run.
+   <https://raw.githubusercontent.com/Moscovium0894/walking-dashboard/refs/heads/feature/berkhamsted-reading-signature/berkhamsted-reading-signature/dist/worker.min.js>
+
+   Use the **minified** file, not `dist/worker.js`. A paste that loses its line
+   breaks would turn the readable bundle into a single comment and deploy a
+   Worker that does nothing; the minified build has no line comments and
+   survives, which the build verifies on every run.
+
+   Note the `refs/heads/` in that URL. This branch name contains a slash, so the
+   form without it is ambiguous about where the branch ends and the path begins.
 4. **Deploy**.
 5. Settings → **Bindings** → Add → **D1 database**, variable name `DB`, pointing
    at `berkhamsted-reading-signature`.
