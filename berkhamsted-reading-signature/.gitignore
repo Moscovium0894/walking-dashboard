@@ -1,6 +1,13 @@
 node_modules/
-dist/
 .wrangler/
-.dev.vars
 .env
 *.local
+
+# Local development secrets. Never commit this file.
+.dev.vars
+
+# dist/worker.js is deliberately committed: it is the single-file bundle that
+# gets pasted into the Cloudflare dashboard editor when deploying without a Git
+# integration. Everything else under dist/ is build noise.
+dist/*
+!dist/worker.js
