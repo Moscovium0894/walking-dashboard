@@ -64,15 +64,12 @@ export const CROPPER_JS = `(function () {
   var imgEl = document.getElementById('crop-image');
   var boxEl = document.getElementById('crop-box');
   var previewEl = document.getElementById('crop-preview');
-  var previewNavyEl = document.getElementById('crop-preview-navy');
-  var headingEl = document.getElementById('crop-heading');
-  var targetInput = document.getElementById('crop-target');
   var statusEl = document.getElementById('crop-status');
   var dimsEl = document.getElementById('crop-dims');
   var saveBtn = document.getElementById('crop-save');
   var resetBtn = document.getElementById('crop-reset');
   var cancelBtn = document.getElementById('crop-cancel');
-  var recropBtns = [document.getElementById('crop-recrop'), document.getElementById('crop-recrop-nav')];
+  var recropBtn = document.getElementById('crop-recrop');
   var submitBtn = document.getElementById('logo-submit');
 
   if (!form || !fileInput || !panel || !stage || !imgEl || !boxEl) return;
@@ -84,7 +81,6 @@ export const CROPPER_JS = `(function () {
   var originalBlob = null;
   var originalType = 'image/png';
   var drag = null;
-  var target = 'logo';
   var anchor = null;
   /** True when the loaded image came from the stored original, not a new file. */
   var reusingOriginal = false;
@@ -169,11 +165,7 @@ export const CROPPER_JS = `(function () {
     if (!natural.w) return;
     var canvas = renderToCanvas();
     try {
-      var url = canvas.toDataURL('image/png');
-      if (previewEl) previewEl.src = url;
-      // Same image; the navy pane applies the white filter in CSS, which is
-      // exactly what the masthead does, so this preview is faithful.
-      if (previewNavyEl) previewNavyEl.src = url;
+      if (previewEl) previewEl.src = canvas.toDataURL('image/png');
     } catch (error) {
       /* A tainted canvas cannot happen here: the image is always a local blob. */
     }
@@ -297,17 +289,6 @@ export const CROPPER_JS = `(function () {
 
   // --- Loading ------------------------------------------------------------
 
-  function setTarget(next) {
-    target = next === 'logo-nav' ? 'logo-nav' : 'logo';
-    if (targetInput) targetInput.value = target;
-    if (headingEl) {
-      headingEl.textContent =
-        target === 'logo-nav'
-          ? 'Crop for the navigation bar - leave the rose out and keep the wordmark'
-          : 'Crop for the email signature';
-    }
-  }
-
   function loadFromBlob(blob, type) {
     originalBlob = blob;
     originalType = type || blob.type || 'image/png';
@@ -338,17 +319,14 @@ export const CROPPER_JS = `(function () {
     var file = fileInput.files && fileInput.files[0];
     if (!file) return;
     reusingOriginal = false;
-    setTarget('logo');
     loadFromBlob(file, file.type);
   });
 
-  recropBtns.forEach(function (button) {
-    if (!button) return;
-    button.addEventListener('click', function () {
+  if (recropBtn) {
+    recropBtn.addEventListener('click', function () {
       reusingOriginal = true;
-      setTarget(button.getAttribute('data-target'));
       say('Loading your original image...');
-      fetch(button.getAttribute('data-src'), { credentials: 'same-origin' })
+      fetch(recropBtn.getAttribute('data-src'), { credentials: 'same-origin' })
         .then(function (response) {
           if (!response.ok) throw new Error('not ok');
           return response.blob();
@@ -356,7 +334,7 @@ export const CROPPER_JS = `(function () {
         .then(function (blob) { loadFromBlob(blob, blob.type); })
         .catch(function () { say('The original image could not be loaded. Upload the file again.'); });
     });
-  });
+  }
 
   if (resetBtn) {
     resetBtn.addEventListener('click', function () {
@@ -398,7 +376,6 @@ export const CROPPER_JS = `(function () {
         var data = new FormData();
         var csrf = form.querySelector('input[name=csrf]');
         data.append('csrf', csrf ? csrf.value : '');
-        data.append('target', target);
         data.append('logo', cropped, 'logo.png');
         // Re-cropping works from the stored original, so there is no need to
         // send it back and rewrite the row with identical bytes.

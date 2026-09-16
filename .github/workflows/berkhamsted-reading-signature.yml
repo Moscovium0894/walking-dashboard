@@ -70,16 +70,17 @@ jobs:
         run: npm run build
 
       # dist/worker.js is committed so it can be pasted into the Cloudflare
-      # dashboard. If a commit changes the source without rebuilding, the file
-      # people copy would be stale, so fail rather than deploy yesterday's code.
-      - name: Check the committed bundle is up to date
+      # dashboard, and assets.generated.ts carries the brand images. If a commit
+      # changes either source without rebuilding, the file people copy would be
+      # stale, so fail rather than ship yesterday's code.
+      - name: Check the committed build output is up to date
         run: |
-          if ! git diff --quiet -- dist/worker.js; then
-            echo "::error::dist/worker.js is out of date. Run 'npm run build' and commit the result."
-            git diff --stat -- dist/worker.js
+          if ! git diff --quiet -- dist/worker.js src/worker/assets.generated.ts; then
+            echo "::error::Build output is out of date. Run 'npm run build' and commit the result."
+            git diff --stat -- dist/worker.js src/worker/assets.generated.ts
             exit 1
           fi
-          echo "Committed bundle matches the source."
+          echo "Committed build output matches the source."
 
       - name: Confirm no secrets are committed
         run: |

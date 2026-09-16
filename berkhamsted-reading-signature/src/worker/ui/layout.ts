@@ -11,6 +11,10 @@ import { BRAND } from '../signature';
 
 export type NavKey = 'dashboard' | 'book' | 'profile' | 'signature';
 
+/** Fixed site branding, served from the Worker. Not administrator-editable. */
+export const SITE_LOGO = '/assets/berkhamsted-logo.png';
+export const SITE_WORDMARK = '/assets/berkhamsted-wordmark.png';
+
 export interface LayoutOptions {
   title: string;
   active?: NavKey;
@@ -20,13 +24,6 @@ export interface LayoutOptions {
   error?: string | null;
   /** Omits the navigation, for the login page. */
   chromeless?: boolean;
-  /**
-   * Public URL of the navigation logo, or null to fall back to a wordmark.
-   * Displayed centred and recoloured white against the navy masthead.
-   */
-  navLogoUrl?: string | null;
-  /** Public URL of the full-colour logo, used on the login page. */
-  logoUrl?: string | null;
   /** Client scripts to load, e.g. ['/admin/js/cropper.js']. */
   scripts?: string[];
 }
@@ -296,14 +293,17 @@ dl.summary dd { margin: 0; color: var(--ink); }
 `.trim();
 }
 
-/** Masthead brand: the cropped navigation logo, or a wordmark if none exists. */
-function brandMark(options: LayoutOptions): string {
-  if (options.navLogoUrl) {
-    return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
-        <img class="masthead-logo" src="${escapeHtml(options.navLogoUrl)}" alt="Berkhamsted" />
+/**
+ * Masthead brand.
+ *
+ * A fixed static asset, not something the administrator can change: the site's
+ * own branding is part of the design. The wordmark is used rather than the full
+ * crest because the rose is illegible at 44px tall.
+ */
+function brandMark(): string {
+  return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+        <img class="masthead-logo" src="${SITE_WORDMARK}" alt="Berkhamsted" />
       </a>`;
-  }
-  return `<a class="wordmark" href="/admin">Berkhamsted<span>Reading signature</span></a>`;
 }
 
 /** Render a full admin page. */
@@ -332,7 +332,7 @@ export function layout(body: string, options: LayoutOptions): string {
     ? ''
     : `<header class="masthead">
     <div class="masthead-inner">
-      ${brandMark(options)}
+      ${brandMark()}
       <form method="post" action="/admin/logout">
         <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
       </form>

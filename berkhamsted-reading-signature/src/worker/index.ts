@@ -23,7 +23,6 @@ import {
 import {
   getCurrentBook,
   getImage,
-  getRevision,
   getSignatureData,
   hasImage,
   putImage,
@@ -33,6 +32,7 @@ import {
   bumpRevision,
   type ImageKey,
 } from './db';
+import { decodeAsset } from './assets.generated';
 import { readConfig, type Env } from './env';
 import {
   LOGIN_RULE,
@@ -179,29 +179,45 @@ async function handleSignature(request: Request, env: Env, url: URL): Promise<Re
 
   const PUBLIC_ASSETS: Record<string, ImageKey> = {
     'logo.png': 'logo',
-    'nav-logo.png': 'logo-nav',
     'cover.jpg': 'cover',
   };
 
   if (asset !== undefined && asset in PUBLIC_ASSETS) {
     const key = PUBLIC_ASSETS[asset] as ImageKey;
     const image = await getImage(env, key);
-    return image === null
-      ? emptyImage(headers)
-      : imageResponse(image, request, {
-          'Cross-Origin-Resource-Policy': 'cross-origin',
-          'Access-Control-Allow-Origin': '*',
+    const crossOrigin = {
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      'Access-Control-Allow-Origin': '*',
+    };
+
+    if (image !== null) return imageResponse(image, request, crossOrigin);
+
+    // No uploaded logo, so serve the built-in crest rather than a blank pixel.
+    // A missing cover still yields a pixel: there is no sensible default book.
+    if (key === 'logo') {
+      const fallback = decodeAsset('berkhamsted-logo.png');
+      if (fallback !== null) {
+        return new Response(fallback, {
+          headers: {
+            'Content-Type': 'image/png',
+            'Cache-Control': 'public, max-age=86400',
+            ...crossOrigin,
+          },
         });
+      }
+    }
+
+    return emptyImage(headers);
   }
 
   if (asset !== undefined) return notFound();
 
   const data = await getSignatureData(env);
-  const [logoPresent, coverPresent] = await Promise.all([
-    hasImage(env, 'logo'),
-    hasImage(env, 'cover'),
-  ]);
-  const options = signatureOptionsFor(url, config.slug, logoPresent, coverPresent);
+  // hasLogo is always true: /signature/<slug>/logo.png serves the uploaded crop
+  // when there is one and the built-in crest otherwise, so the signature never
+  // needs the placeholder.
+  const coverPresent = await hasImage(env, 'cover');
+  const options = signatureOptionsFor(url, config.slug, true, coverPresent);
 
   // The signature itself is cached only briefly. Its images are immutable and
   // revision-keyed, so the document is the only thing that needs to turn over
@@ -245,9 +261,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           configured: config.configured,
           error: ERRORS[url.searchParams.get('error') ?? ''] ?? null,
           notice: NOTICES[url.searchParams.get('ok') ?? ''] ?? null,
-          logoUrl: (await hasImage(env, 'logo'))
-            ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
-            : null,
         }),
       );
     }
@@ -261,9 +274,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           loginPage({
             configured: config.configured,
             error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`,
-            logoUrl: (await hasImage(env, 'logo'))
-              ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
-              : null,
           }),
         );
       }
@@ -281,9 +291,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             error: config.configured
               ? 'Incorrect username or password.'
               : 'This deployment has no administrator configured yet.',
-            logoUrl: (await hasImage(env, 'logo'))
-              ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
-              : null,
           }),
         );
       }
@@ -327,44 +334,36 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
   const buildContext = async () => {
     const data = await getSignatureData(env);
-    const [logoPresent, navLogoPresent, coverPresent, originalPresent] = await Promise.all([
+    const [logoPresent, coverPresent, originalPresent] = await Promise.all([
       hasImage(env, 'logo'),
-      hasImage(env, 'logo-nav'),
       hasImage(env, 'cover'),
       hasImage(env, 'logo-original'),
     ]);
-    const options = signatureOptionsFor(url, config.slug, logoPresent, coverPresent);
 
-    // The masthead prefers the dedicated navigation crop, falling back to the
-    // signature logo so the bar is never empty once anything is uploaded.
-    const navLogoUrl = navLogoPresent
-      ? `/signature/${config.slug}/nav-logo.png?v=${data.revision}`
-      : logoPresent
-        ? `/signature/${config.slug}/logo.png?v=${data.revision}`
-        : null;
+    // The signature always has a logo: the uploaded crop when there is one, the
+    // built-in crest otherwise.
+    const options = signatureOptionsFor(url, config.slug, true, coverPresent);
 
     return {
       data,
       options,
       publicUrl: `${url.origin}/signature/${config.slug}`,
-      navLogoUrl,
       logoPresent,
-      navLogoPresent,
       originalPresent,
     };
   };
 
   // --- Dashboard ---
   if (path === '/admin' && method === 'GET') {
-    const { data, options, publicUrl, navLogoUrl } = await buildContext();
+    const { data, options, publicUrl } = await buildContext();
     return adminHtml(
-      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error, navLogoUrl }),
+      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error }),
     );
   }
 
   // --- Signature ---
   if (path === '/admin/signature' && method === 'GET') {
-    const { data, options, publicUrl, navLogoUrl } = await buildContext();
+    const { data, options, publicUrl } = await buildContext();
     return adminHtml(
       signaturePage({
         data,
@@ -372,7 +371,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
         publicUrl,
         signatureHtml: renderSignatureHtml(data, options),
         notice,
-        navLogoUrl,
       }),
     );
   }
@@ -381,7 +379,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   if (path === '/admin/book') {
     if (method === 'GET') {
       const rawQuery = url.searchParams.get('q');
-      const [current, { navLogoUrl }] = await Promise.all([getCurrentBook(env), buildContext()]);
+      const current = await getCurrentBook(env);
 
       if (rawQuery === null) {
         return adminHtml(
@@ -395,7 +393,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             notice,
             error,
             current,
-            navLogoUrl,
           }),
         );
       }
@@ -411,7 +408,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             searched: false,
             errors: validated.errors,
             current,
-            navLogoUrl,
           }),
         );
       }
@@ -427,7 +423,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             searched: false,
             errors: { query: 'Too many searches. Please wait a moment.' },
             current,
-            navLogoUrl,
           }),
         );
       }
@@ -444,7 +439,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           notice,
           error,
           current,
-          navLogoUrl,
         }),
       );
     }
@@ -509,9 +503,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           csrfToken,
           data: context.data,
           hasLogo: context.logoPresent,
-          hasNavLogo: context.navLogoPresent,
           hasOriginal: context.originalPresent,
-          navLogoUrl: context.navLogoUrl,
           errors: {},
           notice,
           error,
@@ -532,9 +524,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             csrfToken,
             data: context.data,
             hasLogo: context.logoPresent,
-            hasNavLogo: context.navLogoPresent,
             hasOriginal: context.originalPresent,
-            navLogoUrl: context.navLogoUrl,
             errors: validated.errors,
             error: 'Please correct the highlighted fields.',
           }),
@@ -556,8 +546,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
     // Which crop this upload is for. Anything unrecognised means the signature
     // crop, so a malformed request cannot write to an unexpected key.
-    const target: ImageKey = formText(form, 'target') === 'logo-nav' ? 'logo-nav' : 'logo';
-
     const validated = await validateImageUpload(form.get('logo'));
     if (!validated.ok || validated.value === undefined) {
       const context = await buildContext();
@@ -566,9 +554,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           csrfToken,
           data: context.data,
           hasLogo: context.logoPresent,
-          hasNavLogo: context.navLogoPresent,
           hasOriginal: context.originalPresent,
-          navLogoUrl: context.navLogoUrl,
           errors: validated.errors,
           error: 'The logo could not be uploaded.',
         }),
@@ -577,10 +563,10 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
     await putImage(
       env,
-      target,
+      'logo',
       validated.value.contentType,
       validated.value.bytes,
-      await sha256Hex(`${target}:${validated.value.bytes.byteLength}:${Date.now()}`),
+      await sha256Hex(`logo:${validated.value.bytes.byteLength}:${Date.now()}`),
     );
 
     // The cropper also posts the untouched file, so the crop can be adjusted
@@ -618,11 +604,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
 
-    await Promise.all([
-      deleteImage(env, 'logo'),
-      deleteImage(env, 'logo-nav'),
-      deleteImage(env, 'logo-original'),
-    ]);
+    await Promise.all([deleteImage(env, 'logo'), deleteImage(env, 'logo-original')]);
     await bumpRevision(env);
     return redirect('/admin/profile?ok=logo-removed');
   }
@@ -631,7 +613,6 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   const ADMIN_IMAGES: Record<string, ImageKey> = {
     '/admin/image/cover': 'cover',
     '/admin/image/logo': 'logo',
-    '/admin/image/logo-nav': 'logo-nav',
     '/admin/image/logo-original': 'logo-original',
   };
 
@@ -688,6 +669,22 @@ export default {
         // Housekeeping runs after the response, so it never adds latency.
         ctx.waitUntil(purgeExpired(env));
         return await handleAdmin(request, env, url);
+      }
+
+      // Fixed site branding, embedded in the bundle at build time.
+      if (url.pathname.startsWith('/assets/')) {
+        const name = url.pathname.slice('/assets/'.length);
+        const bytes = decodeAsset(name);
+        if (bytes === null) return notFound();
+        return new Response(bytes, {
+          headers: {
+            'Content-Type': 'image/png',
+            // Immutable per deploy: changing an asset changes the bundle.
+            'Cache-Control': 'public, max-age=86400',
+            'Cross-Origin-Resource-Policy': 'cross-origin',
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
       }
 
       if (url.pathname === '/robots.txt') {

@@ -60,8 +60,11 @@ describe('the cropper exports correctly', () => {
     expect(CROPPER_JS).toContain('crop.y = clamp(crop.y, 0, natural.h - crop.h)');
   });
 
-  it('can only write to a known crop target', () => {
-    expect(CROPPER_JS).toContain("target = next === 'logo-nav' ? 'logo-nav' : 'logo'");
+  it('only ever writes the signature logo', () => {
+    // The site's own branding is a static asset. Nothing the cropper posts can
+    // reach it, because there is no target to choose.
+    expect(CROPPER_JS).not.toContain('logo-nav');
+    expect(CROPPER_JS).toContain("data.append('logo', cropped, 'logo.png')");
   });
 
   it('recomputes layout when the window resizes', () => {

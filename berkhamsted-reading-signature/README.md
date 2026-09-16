@@ -21,7 +21,7 @@ its own workflow, and shares nothing with it.
 5. [Cloudflare setup](#5-cloudflare-setup)
 6. [Secrets](#6-secrets)
 7. [Deployment](#7-deployment)
-8. [Uploading the logo](#8-uploading-the-logo)
+8. [Logos](#8-logos)
 9. [Signing in](#9-signing-in)
 10. [Changing your book](#10-changing-your-book)
 11. [Changing your profile](#11-changing-your-profile)
@@ -69,8 +69,8 @@ Email client ──▶ /signature/otto/cover.jpg   (bytes served from D1, never 
 |---|---|---|
 | `/signature/otto` | public | the signature as an HTML document |
 | `/signature/otto.txt` | public | plain-text fallback |
-| `/signature/otto/logo.png` | public | the signature logo, from D1 |
-| `/signature/otto/nav-logo.png` | public | the navigation crop, from D1 |
+| `/signature/otto/logo.png` | public | the signature logo, uploaded or default |
+| `/assets/*.png` | public | fixed site branding, embedded in the build |
 | `/signature/otto/cover.jpg` | public | the current cover, from D1 |
 | `/admin/js/*.js` | public | the two progressive-enhancement scripts |
 | `/admin` | private | dashboard |
@@ -101,6 +101,7 @@ src/
     rateLimit.ts     fixed-window limiting, in D1
     security.ts      response helpers and security headers
     validate.ts      input validation
+    assets.generated.ts  base64 brand images (generated, committed)
     ui/
       layout.ts        page shell, navigation and stylesheet
       pages.ts         the four admin pages
@@ -170,7 +171,7 @@ store a year group — that is calculated on every read.
 |---|---|
 | `profile` | one row: name, date of birth, house, school, subtitle, visibility flags |
 | `current_book` | one row: title, author, cover URL, ISBN, year, source |
-| `images` | logo, navigation crop, original upload and cover bytes |
+| `images` | the uploaded signature logo, its original, and the cover |
 | `settings` | the revision counter used for cache busting |
 | `sessions` | hashed session and CSRF tokens |
 | `rate_limit` | fixed-window counters |
@@ -267,49 +268,62 @@ the walking-dashboard application and cannot affect its workflows.
 
 ---
 
-## 8. Uploading the logo
+## 8. Logos
 
-The logo is **not** in this repository, and this project will not generate or
-download a substitute. Upload it yourself: sign in, go to **Profile →
-Berkhamsted logo**, and choose the file.
+There are two separate things, and only one of them is editable.
 
-It is stored in D1 and served from this Worker, so the signature depends on no
-other host. PNG, JPEG, GIF or WebP up to 1.5MB; a transparent PNG is ideal. The
-file type is verified from its actual bytes, not from its name or the type the
-browser claims.
+### The site's own branding — fixed
 
-### Cropping
+The masthead and the sign-in page use files committed to the repository:
 
-One upload, two crops, because the logo is used in two places that want
-different things:
+| File | Used for |
+|---|---|
+| `public/assets/berkhamsted-logo.png` | the sign-in page, and the signature's default |
+| `public/assets/berkhamsted-wordmark.png` | the masthead, recoloured white in CSS |
 
-| Crop | Where it appears | Treatment |
-|---|---|---|
-| **Signature** | your email signature, 150px wide | full colour on white |
-| **Navigation bar** | the masthead of this site | recoloured white |
+These are **not** editable through the dashboard. The site's branding is part of
+its design, not user content, so there is no route by which an administrator, or
+anyone else, can change it. To change them, replace the files and redeploy.
 
-Choose a file and the cropper opens on the whole image. Drag a handle to resize
-the crop, drag inside it to move it, or drag on the image outside the box to
-draw a new region. Arrow keys nudge it; hold Alt and use the arrow keys to
-resize. Two live previews show the result on white and on navy.
+They are embedded into the bundle at build time by `scripts/embed-assets.mjs`,
+which writes `src/worker/assets.generated.ts` and is run by `npm run build`.
+That keeps the application a single pasteable file with no separate asset
+upload. **Commit the regenerated file** alongside any image change; CI fails if
+they are out of step. They are served from `/assets/<name>.png`.
 
-The untouched upload is kept, so **Re-crop for signature** and **Re-crop for
-navigation** let you adjust either crop later without finding the file again.
+The masthead uses the wordmark rather than the full crest because the rose is
+illegible at 44px tall, and recolours it white with a CSS filter
+(`brightness(0) invert(1)`) which flattens opaque pixels to white and leaves
+alpha alone, so the navy crest reads against the navy bar.
 
-For a crest with a device above a wordmark, the usual choice is the whole logo
-for the signature and just the wordmark for the navigation bar, since the device
-is illegible at 44px tall.
+Licensing and attribution: [`public/assets/ATTRIBUTION.md`](public/assets/ATTRIBUTION.md).
 
-**Why white?** The masthead is navy. The recolouring is a CSS filter
-(`brightness(0) invert(1)`) which flattens every opaque pixel to white and
-leaves the alpha channel alone, so a transparent navy crest reads cleanly. It
-suits a single-colour logo; a multicoloured one will flatten to a white
-silhouette.
+### The signature logo — editable
 
-The cropper is progressive enhancement. With JavaScript disabled the form still
-uploads the file, uncropped, as the signature logo. Until anything is uploaded
-the signature shows a dashed box marked `LOGO` rather than a broken image, and
-the masthead falls back to a text wordmark.
+The logo in your **email signature** defaults to the crest above. To use
+something else, go to **Profile → Signature logo** and upload a file.
+
+PNG, JPEG, GIF or WebP up to 1.5MB; a transparent PNG is ideal. The file type is
+verified from its actual bytes, not from its name or the type the browser
+claims.
+
+#### Cropping
+
+Choosing a file opens a cropper on the whole image. Drag a handle to resize the
+crop, drag inside it to move it, or drag on the image outside the box to draw a
+new region. Arrow keys nudge it; hold Alt and use the arrow keys to resize. A
+live preview shows the result.
+
+The untouched upload is kept, so **Re-crop** lets you adjust it later without
+finding the file again. **Revert to the default crest** removes both.
+
+Cropping happens in the browser on a canvas, because Workers have no image
+decoder. The crop rectangle is held in natural image pixels throughout, so the
+export is an exact pixel region of the source whatever size it is displayed at,
+and PNG output with no canvas fill preserves transparency.
+
+The cropper is progressive enhancement: with JavaScript disabled the form still
+uploads the file, uncropped.
 
 ## 9. Signing in
 

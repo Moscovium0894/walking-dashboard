@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/embed-assets.mjs && node scripts/build.mjs",
     "typecheck": "tsc -b --force",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -18,7 +18,8 @@
     "db:migrate:local": "wrangler d1 migrations apply berkhamsted-reading-signature --local",
     "db:migrate:remote": "wrangler d1 migrations apply berkhamsted-reading-signature --remote",
     "deploy": "npm run build && wrangler deploy",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "embed-assets": "node scripts/embed-assets.mjs"
   },
   "dependencies": {},
   "devDependencies": {

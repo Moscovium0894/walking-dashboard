@@ -147,11 +147,13 @@ export async function setCurrentBook(
  * Images we hold bytes for, and therefore serve from our own origin.
  *
  * 'logo'          the crop used in the email signature, full colour on white.
- * 'logo-nav'      a tighter crop for the site masthead, recoloured white in CSS.
- * 'logo-original' the untouched upload, kept so either crop can be redone
- *                 later without asking for the file again.
+ * 'logo-original' the untouched upload, kept so the crop can be redone later
+ *                 without asking for the file again.
+ *
+ * The site's own branding is NOT here. The masthead and login logo are static
+ * assets baked into the build, deliberately not editable through the admin UI.
  */
-export type ImageKey = 'cover' | 'logo' | 'logo-nav' | 'logo-original';
+export type ImageKey = 'cover' | 'logo' | 'logo-original';
 
 export interface StoredImage {
   contentType: string;
