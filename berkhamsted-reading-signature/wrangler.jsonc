@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // The Worker name must match the Worker created in the Cloudflare dashboard,
+  // otherwise Workers Builds refuses to deploy.
+  "name": "signatures",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-16",
+
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "berkhamsted-reading-signature",
+      // Replace with the ID of your D1 database. This is a resource identifier,
+      // not a credential: it grants nothing without an authenticated request to
+      // your account, so it is safe in a public repository.
+      "database_id": "PLACEHOLDER_REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Non-sensitive configuration. Secrets (ADMIN_USERNAME, ADMIN_PASSWORD,
+  // SESSION_SECRET) are set in the Cloudflare dashboard under
+  // Settings -> Variables and Secrets, never here.
+  "vars": {
+    // The public signature lives at /signature/<SIGNATURE_SLUG>.
+    "SIGNATURE_SLUG": "otto"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

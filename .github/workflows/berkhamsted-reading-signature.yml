@@ -1,0 +1,94 @@
+name: Berkhamsted reading signature
+
+# Checks the berkhamsted-reading-signature project only.
+#
+# This workflow does NOT deploy. Deployment happens from the Cloudflare side,
+# either through Workers Builds watching this repository or by pasting
+# dist/worker.js into the dashboard editor, so no Cloudflare credentials are
+# needed here and none are referenced.
+#
+# It is scoped by path to this project's directory, so it never runs for changes
+# to the walking-dashboard application and cannot interfere with the existing
+# deploy.yml or pipeline.yml workflows.
+
+on:
+  push:
+    branches:
+      - main
+      - feature/berkhamsted-reading-signature
+    paths:
+      - "berkhamsted-reading-signature/**"
+      - ".github/workflows/berkhamsted-reading-signature.yml"
+  pull_request:
+    paths:
+      - "berkhamsted-reading-signature/**"
+      - ".github/workflows/berkhamsted-reading-signature.yml"
+  workflow_dispatch:
+
+# Read-only: this workflow needs nothing more than the source.
+permissions:
+  contents: read
+
+concurrency:
+  group: berkhamsted-reading-signature-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: berkhamsted-reading-signature
+
+jobs:
+  verify:
+    name: Lint, typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: berkhamsted-reading-signature/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      # dist/worker.js is committed so it can be pasted into the Cloudflare
+      # dashboard, and assets.generated.ts carries the brand images. If a commit
+      # changes either source without rebuilding, the file people copy would be
+      # stale, so fail rather than ship yesterday's code.
+      - name: Check the committed build output is up to date
+        run: |
+          if ! git diff --quiet -- dist/worker.js dist/worker.min.js src/worker/assets.generated.ts; then
+            echo "::error::Build output is out of date. Run 'npm run build' and commit the result."
+            git diff --stat -- dist/worker.js dist/worker.min.js src/worker/assets.generated.ts
+            exit 1
+          fi
+          echo "Committed build output matches the source."
+
+      - name: Confirm no secrets are committed
+        run: |
+          # A belt-and-braces check: this repository is public, so a leaked
+          # credential would be immediately exposed.
+          if grep -rInE 'cfut_[A-Za-z0-9_-]{20,}|CLOUDFLARE_API_TOKEN[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']' \
+               --exclude-dir=node_modules --exclude-dir=dist . ; then
+            echo "::error::Possible credential found in the source tree."
+            exit 1
+          fi
+          echo "No credentials found."

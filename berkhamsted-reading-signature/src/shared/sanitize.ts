@@ -1,0 +1,60 @@
+/**
+ * Output encoding helpers.
+ *
+ * The signature is server-rendered HTML that embeds user-controlled values
+ * (book titles, author names, the profile). Every one of those values passes
+ * through here before reaching the response, so a title containing markup is
+ * rendered as text rather than executed.
+ */
+
+const HTML_ENTITIES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+/** Values that can be safely stringified for output. */
+export type Printable = string | number | boolean | null | undefined;
+
+/** Escape a value for interpolation into HTML text or a quoted attribute. */
+export function escapeHtml(value: Printable): string {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, (char) => HTML_ENTITIES[char] ?? char);
+}
+
+/**
+ * Escape a value for use inside an XML/SVG text node.
+ *
+ * Also strips control characters, which are legal in a JSON string but make an
+ * XML document malformed.
+ */
+export function escapeXml(value: Printable): string {
+  // Control characters are legal in a JSON string but make XML malformed.
+  // eslint-disable-next-line no-control-regex
+  const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
+  return escapeHtml(value).replace(CONTROL_CHARACTERS, '');
+}
+
+/**
+ * Allow only absolute http(s) URLs.
+ *
+ * Returns null for anything else, which keeps `javascript:` and `data:` URLs
+ * out of `src` and `href` attributes even if one reaches the database.
+ */
+export function safeHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Collapse whitespace and trim, so stored text stays tidy and predictable. */
+export function normaliseWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
