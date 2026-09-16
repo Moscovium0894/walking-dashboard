@@ -9,21 +9,18 @@
 /**
  * Headers applied to every admin response.
  *
- * The CSP is deliberately strict: the admin UI is server-rendered HTML with no
- * client-side framework, so scripts are limited to a small number of inline
- * blocks admitted individually by hash, and nothing may be loaded from a third
- * party. Cover images are served from our own origin, so even `img-src` stays
- * on `'self'`.
+ * The CSP is strict and needs no hashes or 'unsafe-inline' for scripts: the
+ * admin pages load their two small scripts from /admin/js/, so a plain
+ * `script-src 'self'` covers them. blob: is allowed for images because the
+ * logo cropper previews a locally selected file before it is uploaded.
  */
-export function adminSecurityHeaders(scriptHashes: readonly string[] = []): Record<string, string> {
-  const scriptSrc = ["'self'", ...scriptHashes.map((hash) => `'${hash}'`)].join(' ');
-
+export function adminSecurityHeaders(): Record<string, string> {
   return {
     'Content-Security-Policy': [
       "default-src 'none'",
-      `script-src ${scriptSrc}`,
+      "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      "img-src 'self' data: blob:",
       "font-src 'self'",
       "form-action 'self'",
       "frame-src 'self'",

@@ -20,8 +20,15 @@ export interface LayoutOptions {
   error?: string | null;
   /** Omits the navigation, for the login page. */
   chromeless?: boolean;
-  /** Extra <head> content, e.g. a page-specific inline script. */
-  head?: string;
+  /**
+   * Public URL of the navigation logo, or null to fall back to a wordmark.
+   * Displayed centred and recoloured white against the navy masthead.
+   */
+  navLogoUrl?: string | null;
+  /** Public URL of the full-colour logo, used on the login page. */
+  logoUrl?: string | null;
+  /** Client scripts to load, e.g. ['/admin/js/cropper.js']. */
+  scripts?: string[];
 }
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; href: string; label: string }> = [
@@ -45,19 +52,25 @@ function styles(): string {
   --navy-soft: #16305C;
   --gold: ${BRAND.gold};
   --rose: ${BRAND.rose};
-  --cream: ${BRAND.cream};
+  --paper: #FFFFFF;
+  --wash: ${BRAND.wash};
   --ink: ${BRAND.ink};
   --muted: ${BRAND.muted};
   --rule: ${BRAND.rule};
-  --panel: #FFFFFF;
-  --shadow: 0 1px 2px rgba(10, 33, 66, 0.06), 0 8px 24px rgba(10, 33, 66, 0.06);
+  --shadow: 0 1px 2px rgba(10, 33, 66, 0.05), 0 8px 24px rgba(10, 33, 66, 0.05);
 }
 
 * { box-sizing: border-box; }
 
+/* A class setting display outranks the user agent's [hidden] rule, so the
+   hidden attribute would silently do nothing on .btn elements. That would
+   leave the copy button visible with JavaScript disabled, and the upload
+   button visible while cropping, so state it explicitly. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
-  background: var(--cream);
+  background: var(--paper);
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 16px;
@@ -73,19 +86,30 @@ p { margin: 0 0 1rem; }
 p:last-child { margin-bottom: 0; }
 a { color: var(--navy); }
 
-/* --- Masthead --- */
-.masthead { background: var(--navy); color: #fff; border-bottom: 3px solid var(--gold); }
+/* --- Masthead. The logo sits centred; sign-out is pinned right. --- */
+.masthead { background: var(--navy); border-bottom: 3px solid var(--gold); }
 .masthead-inner {
-  max-width: 1040px; margin: 0 auto; padding: 1.15rem 1.25rem;
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  max-width: 1040px; margin: 0 auto; padding: 1rem 1.25rem;
+  display: flex; align-items: center; justify-content: center; position: relative; min-height: 76px;
+}
+.masthead-logo {
+  /* brightness(0) crushes every opaque pixel to black, invert(1) then lifts it
+     to white. Alpha is untouched, so a transparent logo stays transparent and
+     a navy crest reads cleanly against the navy bar. */
+  display: block; height: 44px; width: auto; max-width: 340px;
+  filter: brightness(0) invert(1);
 }
 .wordmark {
-  font-family: Georgia, 'Times New Roman', Times, serif;
+  font-family: Georgia, 'Times New Roman', Times, serif; text-align: center;
   font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: #fff;
   text-decoration: none; font-weight: 700;
 }
 .wordmark span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--gold); font-weight: 400; margin-top: 2px; }
-.masthead form { margin: 0; }
+.masthead form { margin: 0; position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%); }
+@media (max-width: 560px) {
+  .masthead-inner { justify-content: flex-start; padding-right: 6.5rem; }
+  .masthead-logo { height: 34px; }
+}
 
 /* --- Navigation --- */
 nav.primary { background: var(--navy-soft); }
@@ -106,12 +130,13 @@ main { max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .page-head p { color: var(--muted); margin: 0.35rem 0 0; font-size: 0.925rem; }
 
 .panel {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
   box-shadow: var(--shadow); padding: 1.5rem; margin-bottom: 1.25rem;
 }
 .panel > h2 { padding-bottom: 0.75rem; border-bottom: 1px solid var(--rule); margin-bottom: 1.15rem; }
 .grid { display: grid; gap: 1.25rem; }
 @media (min-width: 860px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.grid.two.top { align-items: start; }
 
 /* --- Identity strip: who / year / book, at a glance --- */
 .identity { display: grid; gap: 0; }
@@ -135,7 +160,7 @@ input[type=text], input[type=password], input[type=date], input[type=number], in
   width: 100%; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.95rem;
   border: 1px solid var(--rule); border-radius: 2px; background: #fff; color: var(--ink);
 }
-input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
+input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--navy); outline-offset: 2px;
 }
 .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
@@ -154,17 +179,17 @@ input[aria-invalid='true'] { border-color: var(--rose); }
   cursor: pointer; text-decoration: none; letter-spacing: 0.02em;
 }
 .btn:hover { background: #16305C; }
+.btn[disabled] { opacity: 0.55; cursor: default; }
 .btn.secondary { background: transparent; color: var(--navy); }
 .btn.secondary:hover { background: rgba(10,33,66,0.06); }
 .btn.small { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
-.btn.link { border-color: transparent; background: transparent; color: var(--navy); text-decoration: underline; padding-left: 0; }
 .actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
 
 /* --- Banners --- */
 .banner { padding: 0.85rem 1.1rem; border-radius: 2px; margin-bottom: 1.25rem; font-size: 0.9rem; border-left: 3px solid; }
 .banner.ok { background: #EEF6F1; border-color: #2FA46C; color: #17512F; }
 .banner.bad { background: #FBEEEE; border-color: var(--rose); color: #7A1A1E; }
-.banner.info { background: #F0F3F8; border-color: var(--navy); color: var(--navy); }
+.banner.info { background: var(--wash); border-color: var(--navy); color: var(--navy); }
 
 /* --- Search results --- */
 .results { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
@@ -173,7 +198,7 @@ input[aria-invalid='true'] { border-color: var(--rose); }
 }
 .result:hover { border-color: var(--navy); }
 .result img, .result .no-cover {
-  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--cream);
+  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--wash);
   border: 1px solid var(--rule);
 }
 .result .no-cover { display: flex; align-items: center; justify-content: center; font-size: 0.55rem; color: var(--muted); text-align: center; letter-spacing: 0.06em; }
@@ -182,12 +207,9 @@ input[aria-invalid='true'] { border-color: var(--rose); }
 .result-meta { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
 .result form { margin: 0.6rem 0 0; }
 
-/* --- Preview --- */
-.preview-frame {
-  width: 100%; min-height: 260px; border: 1px solid var(--rule); border-radius: 2px; background: #fff;
-}
+/* --- Email preview --- */
 .email-chrome { border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: #fff; }
-.email-chrome-bar { background: #F4F5F7; border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
+.email-chrome-bar { background: var(--wash); border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
 .email-chrome-body { padding: 1.25rem; font-family: Georgia, serif; font-size: 0.9rem; color: var(--ink); }
 .email-chrome-body .sep { height: 1px; background: var(--rule); margin: 1.25rem 0; border: 0; }
 
@@ -197,7 +219,6 @@ textarea.code {
 }
 
 dl.summary { margin: 0; display: grid; gap: 0.7rem; }
-@media (min-width: 560px) { dl.summary { grid-template-columns: 9rem 1fr; gap: 0.7rem 1rem; } }
 dl.summary dt { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-top: 0.15rem; }
 dl.summary dd { margin: 0; color: var(--ink); }
 
@@ -205,25 +226,84 @@ dl.summary dd { margin: 0; color: var(--ink); }
 .cover-block img { width: 94px; border-radius: 2px; border: 1px solid var(--rule); }
 .cover-block .no-cover {
   width: 94px; height: 140px; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--cream);
+  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--wash);
 }
+
+/* --- Logo cropper --- */
+.crop-stage {
+  position: relative; margin: 0 auto; background: var(--wash);
+  background-image: linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%),
+                    linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+  border: 1px solid var(--rule); user-select: none; touch-action: none; overflow: hidden;
+}
+.crop-stage img { display: block; max-width: 100%; -webkit-user-drag: none; user-select: none; }
+.crop-box {
+  position: absolute; border: 2px solid var(--navy); box-shadow: 0 0 0 9999px rgba(10, 33, 66, 0.45);
+  cursor: move; touch-action: none;
+}
+/* Handles sit wholly inside the crop box. Straddling the edge would put them
+   half outside the stage whenever the crop is flush against the image border -
+   which is the default - where the stage's overflow:hidden clips them and they
+   cannot be grabbed at all. */
+.crop-handle {
+  position: absolute; width: 16px; height: 16px; background: #fff;
+  border: 2px solid var(--navy); border-radius: 2px; touch-action: none;
+}
+.crop-handle[data-handle=nw] { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=ne] { right: 0; top: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=sw] { left: 0; bottom: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=se] { right: 0; bottom: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=n] { left: 50%; top: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=s] { left: 50%; bottom: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=w] { left: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+.crop-handle[data-handle=e] { right: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+
+.crop-previews { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.crop-preview-pane { flex: 1 1 200px; }
+.crop-preview-label { font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
+.crop-preview-surface { padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; display: flex; align-items: center; justify-content: center; min-height: 72px; }
+.crop-preview-surface.on-white { background: #fff; }
+.crop-preview-surface.on-navy { background: var(--navy); }
+.crop-preview-surface img { max-width: 100%; max-height: 48px; display: block; }
+.crop-preview-surface.on-navy img { filter: brightness(0) invert(1); }
+
+.logo-slots { display: grid; gap: 1.25rem; }
+@media (min-width: 720px) { .logo-slots { grid-template-columns: 1fr 1fr; } }
+.logo-slot { border: 1px solid var(--rule); border-radius: 2px; padding: 1rem; }
+.logo-slot h3 { margin-bottom: 0.3rem; }
+.logo-slot .surface {
+  margin: 0.75rem 0; padding: 0.9rem; border-radius: 2px; display: flex; align-items: center;
+  justify-content: center; min-height: 76px; border: 1px solid var(--rule);
+}
+.logo-slot .surface.on-navy { background: var(--navy); }
+.logo-slot .surface.on-navy img { filter: brightness(0) invert(1); }
+.logo-slot .surface img { max-width: 100%; max-height: 52px; display: block; }
+.logo-slot .empty { color: var(--muted); font-size: 0.8rem; }
 
 /* --- Login --- */
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
 .login-card { width: 100%; max-width: 380px; }
-.login-crest {
-  text-align: center; margin-bottom: 1.5rem; font-family: Georgia, serif;
-  font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--navy); font-weight: 700;
-}
-.login-crest span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--muted); font-weight: 400; margin-top: 4px; }
-
-footer.site { max-width: 1040px; margin: 0 auto; padding: 0 1.25rem 2.5rem; color: var(--muted); font-size: 0.8rem; }
+.login-crest { text-align: center; margin-bottom: 1.5rem; }
+.login-crest img { max-width: 220px; max-height: 96px; width: auto; height: auto; display: inline-block; }
+.login-crest .wordmark { color: var(--navy); }
+.login-crest .wordmark span { color: var(--muted); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 `.trim();
+}
+
+/** Masthead brand: the cropped navigation logo, or a wordmark if none exists. */
+function brandMark(options: LayoutOptions): string {
+  if (options.navLogoUrl) {
+    return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+        <img class="masthead-logo" src="${escapeHtml(options.navLogoUrl)}" alt="Berkhamsted" />
+      </a>`;
+  }
+  return `<a class="wordmark" href="/admin">Berkhamsted<span>Reading signature</span></a>`;
 }
 
 /** Render a full admin page. */
@@ -252,12 +332,16 @@ export function layout(body: string, options: LayoutOptions): string {
     ? ''
     : `<header class="masthead">
     <div class="masthead-inner">
-      <a class="wordmark" href="/admin">Berkhamsted<span>Reading signature</span></a>
+      ${brandMark(options)}
       <form method="post" action="/admin/logout">
         <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
       </form>
     </div>
   </header>`;
+
+  const scripts = (options.scripts ?? [])
+    .map((src) => `<script src="${escapeHtml(src)}" defer></script>`)
+    .join('\n');
 
   return `<!DOCTYPE html>
 <html lang="en-GB">
@@ -267,7 +351,7 @@ export function layout(body: string, options: LayoutOptions): string {
 <meta name="robots" content="noindex, nofollow" />
 <title>${escapeHtml(options.title)} — Berkhamsted Reading Signature</title>
 <style>${styles()}</style>
-${options.head ?? ''}
+${scripts}
 </head>
 <body>
 ${masthead}

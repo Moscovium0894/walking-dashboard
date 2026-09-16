@@ -23,6 +23,7 @@ import {
 import {
   getCurrentBook,
   getImage,
+  getRevision,
   getSignatureData,
   hasImage,
   putImage,
@@ -55,14 +56,8 @@ import {
   renderSignatureText,
   type SignatureOptions,
 } from './signature';
-import {
-  bookPage,
-  dashboardPage,
-  loginPage,
-  profilePage,
-  signaturePage,
-  COPY_SCRIPT,
-} from './ui/pages';
+import { bookPage, dashboardPage, loginPage, profilePage, signaturePage } from './ui/pages';
+import { COPY_JS, CROPPER_JS } from './ui/clientScripts';
 import { validateBook, validateImageUpload, validateProfile, validateSearchQuery } from './validate';
 
 /**
@@ -93,26 +88,25 @@ const ERRORS: Record<string, string> = {
   'cover-failed': 'The book was saved, but its cover could not be downloaded.',
 };
 
-let cachedScriptHash: string | null = null;
-
-/** CSP hash for the one inline script, computed once per isolate. */
-async function copyScriptHash(): Promise<string> {
-  if (cachedScriptHash !== null) return cachedScriptHash;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(COPY_SCRIPT));
-  let binary = '';
-  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
-  cachedScriptHash = `sha256-${btoa(binary)}`;
-  return cachedScriptHash;
-}
-
 /** Read a form field as text, ignoring a File entry rather than stringifying it. */
 function formText(form: FormData, field: string): string {
   const value = form.get(field);
   return typeof value === 'string' ? value : '';
 }
 
-function adminHtml(body: string, scriptHashes: string[] = []): Response {
-  return html(body, { headers: adminSecurityHeaders(scriptHashes) });
+function adminHtml(body: string): Response {
+  return html(body, { headers: adminSecurityHeaders() });
+}
+
+/** Serve a client script with a long cache life; content is fixed per deploy. */
+function scriptResponse(source: string): Response {
+  return new Response(source, {
+    headers: {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 function signatureOptionsFor(
@@ -183,8 +177,14 @@ async function handleSignature(request: Request, env: Env, url: URL): Promise<Re
   const asset = segments[2];
   const headers = publicSecurityHeaders();
 
-  if (asset === 'logo.png' || asset === 'cover.jpg') {
-    const key: ImageKey = asset === 'logo.png' ? 'logo' : 'cover';
+  const PUBLIC_ASSETS: Record<string, ImageKey> = {
+    'logo.png': 'logo',
+    'nav-logo.png': 'logo-nav',
+    'cover.jpg': 'cover',
+  };
+
+  if (asset !== undefined && asset in PUBLIC_ASSETS) {
+    const key = PUBLIC_ASSETS[asset] as ImageKey;
     const image = await getImage(env, key);
     return image === null
       ? emptyImage(headers)
@@ -230,6 +230,11 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   const path = url.pathname;
   const method = request.method;
 
+  // Client scripts. Public and static: they contain no data, and serving them
+  // without a session lets the login page stay cheap.
+  if (path === '/admin/js/cropper.js') return scriptResponse(CROPPER_JS);
+  if (path === '/admin/js/copy.js') return scriptResponse(COPY_JS);
+
   // --- Login ---
   if (path === '/admin/login') {
     if (method === 'GET') {
@@ -240,6 +245,9 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           configured: config.configured,
           error: ERRORS[url.searchParams.get('error') ?? ''] ?? null,
           notice: NOTICES[url.searchParams.get('ok') ?? ''] ?? null,
+          logoUrl: (await hasImage(env, 'logo'))
+            ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
+            : null,
         }),
       );
     }
@@ -253,6 +261,9 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           loginPage({
             configured: config.configured,
             error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`,
+            logoUrl: (await hasImage(env, 'logo'))
+              ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
+              : null,
           }),
         );
       }
@@ -270,6 +281,9 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             error: config.configured
               ? 'Incorrect username or password.'
               : 'This deployment has no administrator configured yet.',
+            logoUrl: (await hasImage(env, 'logo'))
+              ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}`
+              : null,
           }),
         );
       }
@@ -313,25 +327,44 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
   const buildContext = async () => {
     const data = await getSignatureData(env);
-    const [logoPresent, coverPresent] = await Promise.all([
+    const [logoPresent, navLogoPresent, coverPresent, originalPresent] = await Promise.all([
       hasImage(env, 'logo'),
+      hasImage(env, 'logo-nav'),
       hasImage(env, 'cover'),
+      hasImage(env, 'logo-original'),
     ]);
     const options = signatureOptionsFor(url, config.slug, logoPresent, coverPresent);
-    return { data, options, publicUrl: `${url.origin}/signature/${config.slug}` };
+
+    // The masthead prefers the dedicated navigation crop, falling back to the
+    // signature logo so the bar is never empty once anything is uploaded.
+    const navLogoUrl = navLogoPresent
+      ? `/signature/${config.slug}/nav-logo.png?v=${data.revision}`
+      : logoPresent
+        ? `/signature/${config.slug}/logo.png?v=${data.revision}`
+        : null;
+
+    return {
+      data,
+      options,
+      publicUrl: `${url.origin}/signature/${config.slug}`,
+      navLogoUrl,
+      logoPresent,
+      navLogoPresent,
+      originalPresent,
+    };
   };
 
   // --- Dashboard ---
   if (path === '/admin' && method === 'GET') {
-    const { data, options, publicUrl } = await buildContext();
+    const { data, options, publicUrl, navLogoUrl } = await buildContext();
     return adminHtml(
-      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error }),
+      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error, navLogoUrl }),
     );
   }
 
   // --- Signature ---
   if (path === '/admin/signature' && method === 'GET') {
-    const { data, options, publicUrl } = await buildContext();
+    const { data, options, publicUrl, navLogoUrl } = await buildContext();
     return adminHtml(
       signaturePage({
         data,
@@ -339,8 +372,8 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
         publicUrl,
         signatureHtml: renderSignatureHtml(data, options),
         notice,
+        navLogoUrl,
       }),
-      [await copyScriptHash()],
     );
   }
 
@@ -348,7 +381,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   if (path === '/admin/book') {
     if (method === 'GET') {
       const rawQuery = url.searchParams.get('q');
-      const current = await getCurrentBook(env);
+      const [current, { navLogoUrl }] = await Promise.all([getCurrentBook(env), buildContext()]);
 
       if (rawQuery === null) {
         return adminHtml(
@@ -362,6 +395,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             notice,
             error,
             current,
+            navLogoUrl,
           }),
         );
       }
@@ -377,6 +411,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             searched: false,
             errors: validated.errors,
             current,
+            navLogoUrl,
           }),
         );
       }
@@ -392,6 +427,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
             searched: false,
             errors: { query: 'Too many searches. Please wait a moment.' },
             current,
+            navLogoUrl,
           }),
         );
       }
@@ -408,6 +444,7 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
           notice,
           error,
           current,
+          navLogoUrl,
         }),
       );
     }
@@ -466,12 +503,15 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
   // --- Profile ---
   if (path === '/admin/profile') {
     if (method === 'GET') {
-      const { data } = await buildContext();
+      const context = await buildContext();
       return adminHtml(
         profilePage({
           csrfToken,
-          data,
-          hasLogo: await hasImage(env, 'logo'),
+          data: context.data,
+          hasLogo: context.logoPresent,
+          hasNavLogo: context.navLogoPresent,
+          hasOriginal: context.originalPresent,
+          navLogoUrl: context.navLogoUrl,
           errors: {},
           notice,
           error,
@@ -486,12 +526,15 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
       const validated = validateProfile(form);
       if (!validated.ok || validated.value === undefined) {
-        const { data } = await buildContext();
+        const context = await buildContext();
         return adminHtml(
           profilePage({
             csrfToken,
-            data,
-            hasLogo: await hasImage(env, 'logo'),
+            data: context.data,
+            hasLogo: context.logoPresent,
+            hasNavLogo: context.navLogoPresent,
+            hasOriginal: context.originalPresent,
+            navLogoUrl: context.navLogoUrl,
             errors: validated.errors,
             error: 'Please correct the highlighted fields.',
           }),
@@ -511,14 +554,21 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
 
+    // Which crop this upload is for. Anything unrecognised means the signature
+    // crop, so a malformed request cannot write to an unexpected key.
+    const target: ImageKey = formText(form, 'target') === 'logo-nav' ? 'logo-nav' : 'logo';
+
     const validated = await validateImageUpload(form.get('logo'));
     if (!validated.ok || validated.value === undefined) {
-      const { data } = await buildContext();
+      const context = await buildContext();
       return adminHtml(
         profilePage({
           csrfToken,
-          data,
-          hasLogo: await hasImage(env, 'logo'),
+          data: context.data,
+          hasLogo: context.logoPresent,
+          hasNavLogo: context.navLogoPresent,
+          hasOriginal: context.originalPresent,
+          navLogoUrl: context.navLogoUrl,
           errors: validated.errors,
           error: 'The logo could not be uploaded.',
         }),
@@ -527,11 +577,38 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
 
     await putImage(
       env,
-      'logo',
+      target,
       validated.value.contentType,
       validated.value.bytes,
-      await sha256Hex(`logo:${validated.value.bytes.byteLength}:${Date.now()}`),
+      await sha256Hex(`${target}:${validated.value.bytes.byteLength}:${Date.now()}`),
     );
+
+    // The cropper also posts the untouched file, so the crop can be adjusted
+    // later without a fresh upload. It is optional: a no-JavaScript submission
+    // sends only the file itself, which is then used as-is.
+    const originalField = form.get('logoOriginal');
+    if (originalField instanceof File && originalField.size > 0) {
+      const original = await validateImageUpload(originalField);
+      if (original.ok && original.value !== undefined) {
+        await putImage(
+          env,
+          'logo-original',
+          original.value.contentType,
+          original.value.bytes,
+          await sha256Hex(`original:${original.value.bytes.byteLength}:${Date.now()}`),
+        );
+      }
+    } else if (!(await hasImage(env, 'logo-original'))) {
+      // Plain form post: keep this upload as the original too.
+      await putImage(
+        env,
+        'logo-original',
+        validated.value.contentType,
+        validated.value.bytes,
+        await sha256Hex(`original:${validated.value.bytes.byteLength}:${Date.now()}`),
+      );
+    }
+
     await bumpRevision(env);
     return redirect('/admin/profile?ok=logo-saved');
   }
@@ -541,14 +618,25 @@ async function handleAdmin(request: Request, env: Env, url: URL): Promise<Respon
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
 
-    await deleteImage(env, 'logo');
+    await Promise.all([
+      deleteImage(env, 'logo'),
+      deleteImage(env, 'logo-nav'),
+      deleteImage(env, 'logo-original'),
+    ]);
     await bumpRevision(env);
     return redirect('/admin/profile?ok=logo-removed');
   }
 
   // --- Authenticated image previews ---
-  if (path === '/admin/image/cover' || path === '/admin/image/logo') {
-    const key: ImageKey = path.endsWith('logo') ? 'logo' : 'cover';
+  const ADMIN_IMAGES: Record<string, ImageKey> = {
+    '/admin/image/cover': 'cover',
+    '/admin/image/logo': 'logo',
+    '/admin/image/logo-nav': 'logo-nav',
+    '/admin/image/logo-original': 'logo-original',
+  };
+
+  if (path in ADMIN_IMAGES) {
+    const key = ADMIN_IMAGES[path] as ImageKey;
     const image = await getImage(env, key);
     const headers = { 'Cross-Origin-Resource-Policy': 'same-origin' };
     return image === null ? emptyImage(headers) : imageResponse(image, request, headers);

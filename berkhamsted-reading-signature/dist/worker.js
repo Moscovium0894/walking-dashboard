@@ -652,14 +652,13 @@ async function purgeExpired(env) {
 }
 
 // src/worker/security.ts
-function adminSecurityHeaders(scriptHashes = []) {
-  const scriptSrc = ["'self'", ...scriptHashes.map((hash) => `'${hash}'`)].join(" ");
+function adminSecurityHeaders() {
   return {
     "Content-Security-Policy": [
       "default-src 'none'",
-      `script-src ${scriptSrc}`,
+      "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      "img-src 'self' data: blob:",
       "font-src 'self'",
       "form-action 'self'",
       "frame-src 'self'",
@@ -722,7 +721,8 @@ var BRAND = {
   navy: "#0A2142",
   gold: "#EFC486",
   rose: "#C1272D",
-  cream: "#F7F4ED",
+  /** Very light neutral for placeholder fills. The page itself is white. */
+  wash: "#F6F7F9",
   ink: "#1F2937",
   muted: "#5A6473",
   rule: "#D9D3C7",
@@ -850,7 +850,7 @@ function renderSignatureHtml(data, options) {
 function placeholderBox(width, height, label) {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${width}" style="border-collapse:collapse;width:${width}px;">
                 <tr>
-                  <td align="center" valign="middle" height="${height}" style="height:${height}px;border:1px dashed ${BRAND.rule};background-color:${BRAND.cream};font-family:${SANS};font-size:9px;letter-spacing:1px;color:${BRAND.muted};">
+                  <td align="center" valign="middle" height="${height}" style="height:${height}px;border:1px dashed ${BRAND.rule};background-color:${BRAND.wash};font-family:${SANS};font-size:9px;letter-spacing:1px;color:${BRAND.muted};">
                     ${escapeHtml(label)}
                   </td>
                 </tr>
@@ -866,7 +866,7 @@ function renderSignatureDocument(data, options) {
 <meta name="robots" content="noindex, nofollow" />
 <title>${escapeHtml(title)}</title>
 </head>
-<body style="margin:0;padding:24px;background-color:${BRAND.cream};">
+<body style="margin:0;padding:24px;background-color:#FFFFFF;">
 ${renderSignatureHtml(data, options)}
 </body>
 </html>`;
@@ -900,19 +900,25 @@ function styles() {
   --navy-soft: #16305C;
   --gold: ${BRAND.gold};
   --rose: ${BRAND.rose};
-  --cream: ${BRAND.cream};
+  --paper: #FFFFFF;
+  --wash: ${BRAND.wash};
   --ink: ${BRAND.ink};
   --muted: ${BRAND.muted};
   --rule: ${BRAND.rule};
-  --panel: #FFFFFF;
-  --shadow: 0 1px 2px rgba(10, 33, 66, 0.06), 0 8px 24px rgba(10, 33, 66, 0.06);
+  --shadow: 0 1px 2px rgba(10, 33, 66, 0.05), 0 8px 24px rgba(10, 33, 66, 0.05);
 }
 
 * { box-sizing: border-box; }
 
+/* A class setting display outranks the user agent's [hidden] rule, so the
+   hidden attribute would silently do nothing on .btn elements. That would
+   leave the copy button visible with JavaScript disabled, and the upload
+   button visible while cropping, so state it explicitly. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
-  background: var(--cream);
+  background: var(--paper);
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 16px;
@@ -928,19 +934,30 @@ p { margin: 0 0 1rem; }
 p:last-child { margin-bottom: 0; }
 a { color: var(--navy); }
 
-/* --- Masthead --- */
-.masthead { background: var(--navy); color: #fff; border-bottom: 3px solid var(--gold); }
+/* --- Masthead. The logo sits centred; sign-out is pinned right. --- */
+.masthead { background: var(--navy); border-bottom: 3px solid var(--gold); }
 .masthead-inner {
-  max-width: 1040px; margin: 0 auto; padding: 1.15rem 1.25rem;
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  max-width: 1040px; margin: 0 auto; padding: 1rem 1.25rem;
+  display: flex; align-items: center; justify-content: center; position: relative; min-height: 76px;
+}
+.masthead-logo {
+  /* brightness(0) crushes every opaque pixel to black, invert(1) then lifts it
+     to white. Alpha is untouched, so a transparent logo stays transparent and
+     a navy crest reads cleanly against the navy bar. */
+  display: block; height: 44px; width: auto; max-width: 340px;
+  filter: brightness(0) invert(1);
 }
 .wordmark {
-  font-family: Georgia, 'Times New Roman', Times, serif;
+  font-family: Georgia, 'Times New Roman', Times, serif; text-align: center;
   font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: #fff;
   text-decoration: none; font-weight: 700;
 }
 .wordmark span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--gold); font-weight: 400; margin-top: 2px; }
-.masthead form { margin: 0; }
+.masthead form { margin: 0; position: absolute; right: 1.25rem; top: 50%; transform: translateY(-50%); }
+@media (max-width: 560px) {
+  .masthead-inner { justify-content: flex-start; padding-right: 6.5rem; }
+  .masthead-logo { height: 34px; }
+}
 
 /* --- Navigation --- */
 nav.primary { background: var(--navy-soft); }
@@ -961,12 +978,13 @@ main { max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .page-head p { color: var(--muted); margin: 0.35rem 0 0; font-size: 0.925rem; }
 
 .panel {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
   box-shadow: var(--shadow); padding: 1.5rem; margin-bottom: 1.25rem;
 }
 .panel > h2 { padding-bottom: 0.75rem; border-bottom: 1px solid var(--rule); margin-bottom: 1.15rem; }
 .grid { display: grid; gap: 1.25rem; }
 @media (min-width: 860px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.grid.two.top { align-items: start; }
 
 /* --- Identity strip: who / year / book, at a glance --- */
 .identity { display: grid; gap: 0; }
@@ -990,7 +1008,7 @@ input[type=text], input[type=password], input[type=date], input[type=number], in
   width: 100%; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.95rem;
   border: 1px solid var(--rule); border-radius: 2px; background: #fff; color: var(--ink);
 }
-input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
+input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--navy); outline-offset: 2px;
 }
 .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
@@ -1009,17 +1027,17 @@ input[aria-invalid='true'] { border-color: var(--rose); }
   cursor: pointer; text-decoration: none; letter-spacing: 0.02em;
 }
 .btn:hover { background: #16305C; }
+.btn[disabled] { opacity: 0.55; cursor: default; }
 .btn.secondary { background: transparent; color: var(--navy); }
 .btn.secondary:hover { background: rgba(10,33,66,0.06); }
 .btn.small { padding: 0.4rem 0.8rem; font-size: 0.82rem; }
-.btn.link { border-color: transparent; background: transparent; color: var(--navy); text-decoration: underline; padding-left: 0; }
 .actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
 
 /* --- Banners --- */
 .banner { padding: 0.85rem 1.1rem; border-radius: 2px; margin-bottom: 1.25rem; font-size: 0.9rem; border-left: 3px solid; }
 .banner.ok { background: #EEF6F1; border-color: #2FA46C; color: #17512F; }
 .banner.bad { background: #FBEEEE; border-color: var(--rose); color: #7A1A1E; }
-.banner.info { background: #F0F3F8; border-color: var(--navy); color: var(--navy); }
+.banner.info { background: var(--wash); border-color: var(--navy); color: var(--navy); }
 
 /* --- Search results --- */
 .results { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: 0.75rem; }
@@ -1028,7 +1046,7 @@ input[aria-invalid='true'] { border-color: var(--rose); }
 }
 .result:hover { border-color: var(--navy); }
 .result img, .result .no-cover {
-  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--cream);
+  width: 56px; height: 84px; object-fit: cover; flex: 0 0 56px; border-radius: 2px; background: var(--wash);
   border: 1px solid var(--rule);
 }
 .result .no-cover { display: flex; align-items: center; justify-content: center; font-size: 0.55rem; color: var(--muted); text-align: center; letter-spacing: 0.06em; }
@@ -1037,12 +1055,9 @@ input[aria-invalid='true'] { border-color: var(--rose); }
 .result-meta { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
 .result form { margin: 0.6rem 0 0; }
 
-/* --- Preview --- */
-.preview-frame {
-  width: 100%; min-height: 260px; border: 1px solid var(--rule); border-radius: 2px; background: #fff;
-}
+/* --- Email preview --- */
 .email-chrome { border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: #fff; }
-.email-chrome-bar { background: #F4F5F7; border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
+.email-chrome-bar { background: var(--wash); border-bottom: 1px solid var(--rule); padding: 0.65rem 0.9rem; font-size: 0.8rem; color: var(--muted); }
 .email-chrome-body { padding: 1.25rem; font-family: Georgia, serif; font-size: 0.9rem; color: var(--ink); }
 .email-chrome-body .sep { height: 1px; background: var(--rule); margin: 1.25rem 0; border: 0; }
 
@@ -1052,7 +1067,6 @@ textarea.code {
 }
 
 dl.summary { margin: 0; display: grid; gap: 0.7rem; }
-@media (min-width: 560px) { dl.summary { grid-template-columns: 9rem 1fr; gap: 0.7rem 1rem; } }
 dl.summary dt { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-top: 0.15rem; }
 dl.summary dd { margin: 0; color: var(--ink); }
 
@@ -1060,25 +1074,82 @@ dl.summary dd { margin: 0; color: var(--ink); }
 .cover-block img { width: 94px; border-radius: 2px; border: 1px solid var(--rule); }
 .cover-block .no-cover {
   width: 94px; height: 140px; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--cream);
+  border: 1px dashed var(--rule); border-radius: 2px; color: var(--muted); font-size: 0.7rem; text-align: center; background: var(--wash);
 }
+
+/* --- Logo cropper --- */
+.crop-stage {
+  position: relative; margin: 0 auto; background: var(--wash);
+  background-image: linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%),
+                    linear-gradient(45deg, #E8EAEE 25%, transparent 25%, transparent 75%, #E8EAEE 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+  border: 1px solid var(--rule); user-select: none; touch-action: none; overflow: hidden;
+}
+.crop-stage img { display: block; max-width: 100%; -webkit-user-drag: none; user-select: none; }
+.crop-box {
+  position: absolute; border: 2px solid var(--navy); box-shadow: 0 0 0 9999px rgba(10, 33, 66, 0.45);
+  cursor: move; touch-action: none;
+}
+/* Handles sit wholly inside the crop box. Straddling the edge would put them
+   half outside the stage whenever the crop is flush against the image border -
+   which is the default - where the stage's overflow:hidden clips them and they
+   cannot be grabbed at all. */
+.crop-handle {
+  position: absolute; width: 16px; height: 16px; background: #fff;
+  border: 2px solid var(--navy); border-radius: 2px; touch-action: none;
+}
+.crop-handle[data-handle=nw] { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=ne] { right: 0; top: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=sw] { left: 0; bottom: 0; cursor: nesw-resize; }
+.crop-handle[data-handle=se] { right: 0; bottom: 0; cursor: nwse-resize; }
+.crop-handle[data-handle=n] { left: 50%; top: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=s] { left: 50%; bottom: 0; margin-left: -8px; cursor: ns-resize; }
+.crop-handle[data-handle=w] { left: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+.crop-handle[data-handle=e] { right: 0; top: 50%; margin-top: -8px; cursor: ew-resize; }
+
+.crop-previews { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.crop-preview-pane { flex: 1 1 200px; }
+.crop-preview-label { font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
+.crop-preview-surface { padding: 0.9rem; border: 1px solid var(--rule); border-radius: 2px; display: flex; align-items: center; justify-content: center; min-height: 72px; }
+.crop-preview-surface.on-white { background: #fff; }
+.crop-preview-surface.on-navy { background: var(--navy); }
+.crop-preview-surface img { max-width: 100%; max-height: 48px; display: block; }
+.crop-preview-surface.on-navy img { filter: brightness(0) invert(1); }
+
+.logo-slots { display: grid; gap: 1.25rem; }
+@media (min-width: 720px) { .logo-slots { grid-template-columns: 1fr 1fr; } }
+.logo-slot { border: 1px solid var(--rule); border-radius: 2px; padding: 1rem; }
+.logo-slot h3 { margin-bottom: 0.3rem; }
+.logo-slot .surface {
+  margin: 0.75rem 0; padding: 0.9rem; border-radius: 2px; display: flex; align-items: center;
+  justify-content: center; min-height: 76px; border: 1px solid var(--rule);
+}
+.logo-slot .surface.on-navy { background: var(--navy); }
+.logo-slot .surface.on-navy img { filter: brightness(0) invert(1); }
+.logo-slot .surface img { max-width: 100%; max-height: 52px; display: block; }
+.logo-slot .empty { color: var(--muted); font-size: 0.8rem; }
 
 /* --- Login --- */
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
 .login-card { width: 100%; max-width: 380px; }
-.login-crest {
-  text-align: center; margin-bottom: 1.5rem; font-family: Georgia, serif;
-  font-size: 1.05rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--navy); font-weight: 700;
-}
-.login-crest span { display: block; font-size: 0.6rem; letter-spacing: 0.3em; color: var(--muted); font-weight: 400; margin-top: 4px; }
-
-footer.site { max-width: 1040px; margin: 0 auto; padding: 0 1.25rem 2.5rem; color: var(--muted); font-size: 0.8rem; }
+.login-crest { text-align: center; margin-bottom: 1.5rem; }
+.login-crest img { max-width: 220px; max-height: 96px; width: auto; height: auto; display: inline-block; }
+.login-crest .wordmark { color: var(--navy); }
+.login-crest .wordmark span { color: var(--muted); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 `.trim();
+}
+function brandMark(options) {
+  if (options.navLogoUrl) {
+    return `<a href="/admin" aria-label="Berkhamsted reading signature, dashboard">
+        <img class="masthead-logo" src="${escapeHtml(options.navLogoUrl)}" alt="Berkhamsted" />
+      </a>`;
+  }
+  return `<a class="wordmark" href="/admin">Berkhamsted<span>Reading signature</span></a>`;
 }
 function layout(body, options) {
   const banners = [
@@ -1094,12 +1165,13 @@ function layout(body, options) {
   </nav>`;
   const masthead = options.chromeless ? "" : `<header class="masthead">
     <div class="masthead-inner">
-      <a class="wordmark" href="/admin">Berkhamsted<span>Reading signature</span></a>
+      ${brandMark(options)}
       <form method="post" action="/admin/logout">
         <button class="btn secondary small" type="submit" style="border-color:rgba(255,255,255,0.4);color:#fff;">Sign out</button>
       </form>
     </div>
   </header>`;
+  const scripts = (options.scripts ?? []).map((src) => `<script src="${escapeHtml(src)}" defer></script>`).join("\n");
   return `<!DOCTYPE html>
 <html lang="en-GB">
 <head>
@@ -1108,7 +1180,7 @@ function layout(body, options) {
 <meta name="robots" content="noindex, nofollow" />
 <title>${escapeHtml(options.title)} \u2014 Berkhamsted Reading Signature</title>
 <style>${styles()}</style>
-${options.head ?? ""}
+${scripts}
 </head>
 <body>
 ${masthead}
@@ -1137,7 +1209,9 @@ function loginPage(options) {
        </div>`;
   const body = `<div class="login-wrap">
   <div class="login-card">
-    <div class="login-crest">Berkhamsted<span>Reading signature</span></div>
+    <div class="login-crest">
+      ${options.logoUrl ? `<img src="${escapeHtml(options.logoUrl)}" alt="Berkhamsted School" />` : '<span class="wordmark">Berkhamsted<span>Reading signature</span></span>'}
+    </div>
     ${setupWarning}
     ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ""}
     ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ""}
@@ -1232,6 +1306,7 @@ function dashboardPage(options) {
   return layout(body, {
     title: "Dashboard",
     active: "dashboard",
+    navLogoUrl: options.navLogoUrl ?? null,
     notice: options.notice ?? null,
     error: options.error ?? null
   });
@@ -1341,6 +1416,7 @@ ${options.current ? `<div class="banner info">
   return layout(body, {
     title: "Change book",
     active: "book",
+    navLogoUrl: options.navLogoUrl ?? null,
     notice: options.notice ?? null,
     error: options.error ?? null
   });
@@ -1420,26 +1496,96 @@ function profilePage(options) {
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" id="logo-cropper">
   <h2>Berkhamsted logo</h2>
   <p style="color:var(--muted);font-size:0.9rem;">
-    Upload the official logo as a PNG. It is stored here and served from this Worker, so the
-    signature does not depend on any other host. Until one is uploaded the signature shows a
-    marked placeholder rather than a broken image.
+    Upload the logo once, then crop it twice: the full crest for your email signature, and a
+    tighter crop of just the wordmark for the bar at the top of this site. The navigation crop is
+    recoloured white automatically, so a navy logo reads against the navy bar.
   </p>
-  ${options.hasLogo ? `<p><img src="/admin/image/logo?v=${options.data.revision}" alt="Current logo"
-              style="max-width:240px;border:1px solid var(--rule);border-radius:2px;background:var(--navy);padding:0.5rem;" /></p>` : '<div class="banner info">No logo uploaded yet.</div>'}
-  <form method="post" action="/admin/logo" enctype="multipart/form-data">
-    ${csrfField(csrfToken)}
-    <div class="field">
-      <label for="logo">Logo file</label>
-      <input type="file" id="logo" name="logo" accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, "logo")} />
-      ${fieldError(errors, "logo")}
-      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Around 600px wide works best.</p>
+
+  <div class="logo-slots">
+    <div class="logo-slot">
+      <h3>Signature</h3>
+      <p class="hint" style="margin:0;">Shown in your email signature, at 150px wide on white.</p>
+      <div class="surface">
+        ${options.hasLogo ? `<img src="/admin/image/logo?v=${options.data.revision}" alt="Current signature logo" />` : '<span class="empty">Nothing uploaded yet</span>'}
+      </div>
+      ${options.hasOriginal ? `<button class="btn secondary small" type="button" id="crop-recrop"
+                     data-src="/admin/image/logo-original?v=${options.data.revision}"
+                     data-target="logo">Re-crop for signature</button>` : ""}
     </div>
-    <button class="btn" type="submit">Upload logo</button>
+
+    <div class="logo-slot">
+      <h3>Navigation bar</h3>
+      <p class="hint" style="margin:0;">Crop out the rose and keep the wordmark. Shown in white.</p>
+      <div class="surface on-navy">
+        ${options.hasNavLogo ? `<img src="/admin/image/logo-nav?v=${options.data.revision}" alt="Current navigation logo" />` : '<span class="empty" style="color:rgba(255,255,255,0.7);">Nothing cropped yet</span>'}
+      </div>
+      ${options.hasOriginal ? `<button class="btn secondary small" type="button" id="crop-recrop-nav"
+                     data-src="/admin/image/logo-original?v=${options.data.revision}"
+                     data-target="logo-nav">Re-crop for navigation</button>` : ""}
+    </div>
+  </div>
+
+  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
+    ${csrfField(csrfToken)}
+    <input type="hidden" name="target" id="crop-target" value="logo" />
+    <div class="field">
+      <label for="logo-file">Upload a logo</label>
+      <input type="file" id="logo-file" name="logo"
+             accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, "logo")} />
+      ${fieldError(errors, "logo")}
+      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Transparent PNG works best.</p>
+    </div>
+
+    <button class="btn" type="submit" id="logo-submit">Upload logo</button>
+
+    <div id="crop-panel" hidden>
+      <div class="field">
+        <label id="crop-heading">Crop</label>
+        <div class="crop-stage" id="crop-stage">
+          <img id="crop-image" alt="" />
+          <div class="crop-box" id="crop-box" tabindex="0" role="application"
+               aria-label="Crop area. Arrow keys move it, hold Alt and use arrow keys to resize.">
+            <span class="crop-handle" data-handle="nw"></span>
+            <span class="crop-handle" data-handle="n"></span>
+            <span class="crop-handle" data-handle="ne"></span>
+            <span class="crop-handle" data-handle="e"></span>
+            <span class="crop-handle" data-handle="se"></span>
+            <span class="crop-handle" data-handle="s"></span>
+            <span class="crop-handle" data-handle="sw"></span>
+            <span class="crop-handle" data-handle="w"></span>
+          </div>
+        </div>
+        <p class="hint" id="crop-dims"></p>
+        <p class="hint" id="crop-status" role="status"></p>
+      </div>
+
+      <div class="crop-previews">
+        <div class="crop-preview-pane">
+          <div class="crop-preview-label">On white, as in the signature</div>
+          <div class="crop-preview-surface on-white">
+            <img id="crop-preview" alt="Preview of the cropped logo" />
+          </div>
+        </div>
+        <div class="crop-preview-pane">
+          <div class="crop-preview-label">On navy, as in the top bar</div>
+          <div class="crop-preview-surface on-navy">
+            <img id="crop-preview-navy" alt="Preview of the cropped logo in white" />
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit" id="crop-save">Save crop</button>
+        <button class="btn secondary small" type="button" id="crop-reset">Reset crop</button>
+        <button class="btn secondary small" type="button" id="crop-cancel">Cancel</button>
+      </div>
+    </div>
   </form>
-  ${options.hasLogo ? `<form method="post" action="/admin/logo/delete" style="margin-top:0.75rem;">
+
+  ${options.hasLogo || options.hasNavLogo ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
            ${csrfField(csrfToken)}
            <button class="btn secondary small" type="submit">Remove logo</button>
          </form>` : ""}
@@ -1447,28 +1593,12 @@ function profilePage(options) {
   return layout(body, {
     title: "Profile",
     active: "profile",
+    navLogoUrl: options.navLogoUrl ?? null,
+    scripts: ["/admin/js/cropper.js"],
     notice: options.notice ?? null,
     error: options.error ?? null
   });
 }
-var COPY_SCRIPT = `(function(){
-  var button = document.getElementById('copy-button');
-  var source = document.getElementById('signature-html');
-  var status = document.getElementById('copy-status');
-  if (!button || !source) return;
-  button.hidden = false;
-  button.addEventListener('click', function(){
-    source.select();
-    var done = function(ok){
-      status.textContent = ok ? 'Copied to clipboard.' : 'Press Ctrl+C or Cmd+C to copy.';
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(source.value).then(function(){ done(true); }, function(){ done(false); });
-    } else {
-      done(false);
-    }
-  });
-})();`;
 function signaturePage(options) {
   const { data, publicUrl, signatureHtml } = options;
   const body = `
@@ -1538,9 +1668,401 @@ function signaturePage(options) {
     title: "Signature",
     active: "signature",
     notice: options.notice ?? null,
-    head: `<script>${COPY_SCRIPT}</script>`
+    navLogoUrl: options.navLogoUrl ?? null,
+    scripts: ["/admin/js/copy.js"]
   });
 }
+
+// src/worker/ui/clientScripts.ts
+var COPY_JS = `(function () {
+  'use strict';
+  var button = document.getElementById('copy-button');
+  var source = document.getElementById('signature-html');
+  var status = document.getElementById('copy-status');
+  if (!button || !source) return;
+
+  button.hidden = false;
+  button.addEventListener('click', function () {
+    source.focus();
+    source.select();
+    var done = function (ok) {
+      if (status) {
+        status.textContent = ok ? 'Copied to clipboard.' : 'Press Ctrl+C or Cmd+C to copy.';
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(source.value).then(function () { done(true); }, function () { done(false); });
+    } else {
+      done(false);
+    }
+  });
+})();
+`;
+var CROPPER_JS = `(function () {
+  'use strict';
+
+  var root = document.getElementById('logo-cropper');
+  if (!root || typeof HTMLCanvasElement === 'undefined') return;
+
+  var form = document.getElementById('logo-form');
+  var fileInput = document.getElementById('logo-file');
+  var panel = document.getElementById('crop-panel');
+  var stage = document.getElementById('crop-stage');
+  var imgEl = document.getElementById('crop-image');
+  var boxEl = document.getElementById('crop-box');
+  var previewEl = document.getElementById('crop-preview');
+  var previewNavyEl = document.getElementById('crop-preview-navy');
+  var headingEl = document.getElementById('crop-heading');
+  var targetInput = document.getElementById('crop-target');
+  var statusEl = document.getElementById('crop-status');
+  var dimsEl = document.getElementById('crop-dims');
+  var saveBtn = document.getElementById('crop-save');
+  var resetBtn = document.getElementById('crop-reset');
+  var cancelBtn = document.getElementById('crop-cancel');
+  var recropBtns = [document.getElementById('crop-recrop'), document.getElementById('crop-recrop-nav')];
+  var submitBtn = document.getElementById('logo-submit');
+
+  if (!form || !fileInput || !panel || !stage || !imgEl || !boxEl) return;
+
+  // --- State. crop is ALWAYS in natural image pixels. ---
+  var natural = { w: 0, h: 0 };
+  var crop = { x: 0, y: 0, w: 0, h: 0 };
+  var scale = 1;
+  var originalBlob = null;
+  var originalType = 'image/png';
+  var drag = null;
+  var target = 'logo';
+  var anchor = null;
+  /** True when the loaded image came from the stored original, not a new file. */
+  var reusingOriginal = false;
+
+  var MIN_CROP = 16;
+  var MAX_OUTPUT = 1400;
+
+  function clamp(value, low, high) {
+    return value < low ? low : value > high ? high : value;
+  }
+
+  function say(message) {
+    if (statusEl) statusEl.textContent = message || '';
+  }
+
+  // --- Geometry -----------------------------------------------------------
+
+  function layout() {
+    if (!natural.w || !natural.h) return;
+    var available = stage.clientWidth || 480;
+    scale = Math.min(1, available / natural.w);
+    imgEl.style.width = Math.round(natural.w * scale) + 'px';
+    imgEl.style.height = Math.round(natural.h * scale) + 'px';
+    stage.style.height = Math.round(natural.h * scale) + 'px';
+    drawBox();
+  }
+
+  function drawBox() {
+    boxEl.style.left = Math.round(crop.x * scale) + 'px';
+    boxEl.style.top = Math.round(crop.y * scale) + 'px';
+    boxEl.style.width = Math.round(crop.w * scale) + 'px';
+    boxEl.style.height = Math.round(crop.h * scale) + 'px';
+    if (dimsEl) {
+      dimsEl.textContent = Math.round(crop.w) + ' x ' + Math.round(crop.h) + ' pixels';
+    }
+    drawPreview();
+  }
+
+  function resetCrop() {
+    crop = { x: 0, y: 0, w: natural.w, h: natural.h };
+    drawBox();
+  }
+
+  /** Constrain the crop to the image and to a sane minimum size. */
+  function normaliseCrop() {
+    crop.w = clamp(crop.w, Math.min(MIN_CROP, natural.w), natural.w);
+    crop.h = clamp(crop.h, Math.min(MIN_CROP, natural.h), natural.h);
+    crop.x = clamp(crop.x, 0, natural.w - crop.w);
+    crop.y = clamp(crop.y, 0, natural.h - crop.h);
+  }
+
+  // --- Rendering ----------------------------------------------------------
+
+  /**
+   * Draw the current crop to a canvas at source resolution.
+   * Never fills the canvas, so transparency survives.
+   */
+  function renderToCanvas() {
+    var sx = Math.round(crop.x);
+    var sy = Math.round(crop.y);
+    var sw = Math.max(1, Math.round(crop.w));
+    var sh = Math.max(1, Math.round(crop.h));
+
+    var outW = sw;
+    var outH = sh;
+    if (outW > MAX_OUTPUT) {
+      outH = Math.max(1, Math.round((MAX_OUTPUT / outW) * outH));
+      outW = MAX_OUTPUT;
+    }
+
+    var canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    var ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, outW, outH);
+    return canvas;
+  }
+
+  function drawPreview() {
+    if (!natural.w) return;
+    var canvas = renderToCanvas();
+    try {
+      var url = canvas.toDataURL('image/png');
+      if (previewEl) previewEl.src = url;
+      // Same image; the navy pane applies the white filter in CSS, which is
+      // exactly what the masthead does, so this preview is faithful.
+      if (previewNavyEl) previewNavyEl.src = url;
+    } catch (error) {
+      /* A tainted canvas cannot happen here: the image is always a local blob. */
+    }
+  }
+
+  // --- Pointer interaction ------------------------------------------------
+
+  function pointerToNatural(event) {
+    var rect = imgEl.getBoundingClientRect();
+    return {
+      x: clamp((event.clientX - rect.left) / scale, 0, natural.w),
+      y: clamp((event.clientY - rect.top) / scale, 0, natural.h),
+    };
+  }
+
+  function startDrag(event, mode) {
+    event.preventDefault();
+    var point = pointerToNatural(event);
+    drag = {
+      mode: mode,
+      startX: point.x,
+      startY: point.y,
+      origin: { x: crop.x, y: crop.y, w: crop.w, h: crop.h },
+      pointerId: event.pointerId,
+    };
+    if (event.target.setPointerCapture) {
+      try { event.target.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function moveDrag(event) {
+    if (!drag) return;
+    event.preventDefault();
+
+    var point = pointerToNatural(event);
+    var dx = point.x - drag.startX;
+    var dy = point.y - drag.startY;
+    var o = drag.origin;
+
+    if (drag.mode === 'draw' && anchor) {
+      crop.x = Math.min(anchor.x, point.x);
+      crop.y = Math.min(anchor.y, point.y);
+      crop.w = Math.abs(point.x - anchor.x);
+      crop.h = Math.abs(point.y - anchor.y);
+    } else if (drag.mode === 'move') {
+      crop.x = clamp(o.x + dx, 0, natural.w - o.w);
+      crop.y = clamp(o.y + dy, 0, natural.h - o.h);
+      crop.w = o.w;
+      crop.h = o.h;
+    } else {
+      // Work out the new edges, then derive x/y/w/h. Each edge is clamped
+      // against the opposite edge so the box can never invert.
+      var left = o.x;
+      var top = o.y;
+      var right = o.x + o.w;
+      var bottom = o.y + o.h;
+
+      if (drag.mode.indexOf('w') !== -1) left = clamp(o.x + dx, 0, right - MIN_CROP);
+      if (drag.mode.indexOf('e') !== -1) right = clamp(right + dx, left + MIN_CROP, natural.w);
+      if (drag.mode.indexOf('n') !== -1) top = clamp(o.y + dy, 0, bottom - MIN_CROP);
+      if (drag.mode.indexOf('s') !== -1) bottom = clamp(bottom + dy, top + MIN_CROP, natural.h);
+
+      crop.x = left;
+      crop.y = top;
+      crop.w = right - left;
+      crop.h = bottom - top;
+    }
+
+    normaliseCrop();
+    drawBox();
+  }
+
+  function endDrag() {
+    drag = null;
+  }
+
+  boxEl.addEventListener('pointerdown', function (event) {
+    var handle = event.target.getAttribute('data-handle');
+    startDrag(event, handle || 'move');
+  });
+
+  // Pressing on the image outside the box draws a fresh crop from that corner,
+  // which is the conventional behaviour and avoids the box jumping under the
+  // cursor on a stray click.
+  imgEl.addEventListener('pointerdown', function (event) {
+    var point = pointerToNatural(event);
+    anchor = { x: point.x, y: point.y };
+    startDrag(event, 'draw');
+  });
+
+  window.addEventListener('pointermove', moveDrag);
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  window.addEventListener('resize', layout);
+
+  // --- Keyboard control, so the cropper is usable without a pointer -------
+
+  boxEl.addEventListener('keydown', function (event) {
+    var step = event.shiftKey ? 20 : 2;
+    var resizing = event.altKey;
+    var handled = true;
+
+    if (event.key === 'ArrowLeft') {
+      if (resizing) crop.w -= step; else crop.x -= step;
+    } else if (event.key === 'ArrowRight') {
+      if (resizing) crop.w += step; else crop.x += step;
+    } else if (event.key === 'ArrowUp') {
+      if (resizing) crop.h -= step; else crop.y -= step;
+    } else if (event.key === 'ArrowDown') {
+      if (resizing) crop.h += step; else crop.y += step;
+    } else {
+      handled = false;
+    }
+
+    if (handled) {
+      event.preventDefault();
+      normaliseCrop();
+      drawBox();
+    }
+  });
+
+  // --- Loading ------------------------------------------------------------
+
+  function setTarget(next) {
+    target = next === 'logo-nav' ? 'logo-nav' : 'logo';
+    if (targetInput) targetInput.value = target;
+    if (headingEl) {
+      headingEl.textContent =
+        target === 'logo-nav'
+          ? 'Crop for the navigation bar - leave the rose out and keep the wordmark'
+          : 'Crop for the email signature';
+    }
+  }
+
+  function loadFromBlob(blob, type) {
+    originalBlob = blob;
+    originalType = type || blob.type || 'image/png';
+
+    var url = URL.createObjectURL(blob);
+    imgEl.onload = function () {
+      natural.w = imgEl.naturalWidth;
+      natural.h = imgEl.naturalHeight;
+      if (!natural.w || !natural.h) {
+        say('That image could not be read.');
+        return;
+      }
+      panel.hidden = false;
+      if (submitBtn) submitBtn.hidden = true;
+      resetCrop();
+      layout();
+      say('Drag inside the image to move the crop, or drag a handle to resize it.');
+      URL.revokeObjectURL(url);
+    };
+    imgEl.onerror = function () {
+      say('That file could not be opened as an image.');
+      URL.revokeObjectURL(url);
+    };
+    imgEl.src = url;
+  }
+
+  fileInput.addEventListener('change', function () {
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    reusingOriginal = false;
+    setTarget('logo');
+    loadFromBlob(file, file.type);
+  });
+
+  recropBtns.forEach(function (button) {
+    if (!button) return;
+    button.addEventListener('click', function () {
+      reusingOriginal = true;
+      setTarget(button.getAttribute('data-target'));
+      say('Loading your original image...');
+      fetch(button.getAttribute('data-src'), { credentials: 'same-origin' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('not ok');
+          return response.blob();
+        })
+        .then(function (blob) { loadFromBlob(blob, blob.type); })
+        .catch(function () { say('The original image could not be loaded. Upload the file again.'); });
+    });
+  });
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function () {
+      resetCrop();
+      say('Crop reset to the whole image.');
+    });
+  }
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', function () {
+      panel.hidden = true;
+      if (submitBtn) submitBtn.hidden = false;
+      fileInput.value = '';
+      originalBlob = null;
+      say('');
+    });
+  }
+
+  // --- Saving -------------------------------------------------------------
+
+  function canvasToBlob(canvas) {
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(function (blob) {
+        if (blob) resolve(blob); else reject(new Error('export failed'));
+      }, 'image/png');
+    });
+  }
+
+  form.addEventListener('submit', function (event) {
+    // Without a loaded image the plain form post still works, uncropped.
+    if (panel.hidden || !originalBlob || !natural.w) return;
+
+    event.preventDefault();
+    if (saveBtn) saveBtn.disabled = true;
+    say('Saving...');
+
+    canvasToBlob(renderToCanvas())
+      .then(function (cropped) {
+        var data = new FormData();
+        var csrf = form.querySelector('input[name=csrf]');
+        data.append('csrf', csrf ? csrf.value : '');
+        data.append('target', target);
+        data.append('logo', cropped, 'logo.png');
+        // Re-cropping works from the stored original, so there is no need to
+        // send it back and rewrite the row with identical bytes.
+        if (!reusingOriginal) data.append('logoOriginal', originalBlob, 'original');
+        return fetch(form.action, { method: 'POST', body: data, credentials: 'same-origin' });
+      })
+      .then(function (response) {
+        if (!response.ok && response.status !== 0) throw new Error('upload failed');
+        window.location.href = '/admin/profile?ok=logo-saved';
+      })
+      .catch(function () {
+        if (saveBtn) saveBtn.disabled = false;
+        say('The logo could not be saved. Please try again.');
+      });
+  });
+})();
+`;
 
 // src/worker/validate.ts
 var LIMITS = {
@@ -1702,21 +2224,21 @@ var ERRORS = {
   "rate-limited": "Too many requests. Please wait a moment and try again.",
   "cover-failed": "The book was saved, but its cover could not be downloaded."
 };
-var cachedScriptHash = null;
-async function copyScriptHash() {
-  if (cachedScriptHash !== null) return cachedScriptHash;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(COPY_SCRIPT));
-  let binary = "";
-  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
-  cachedScriptHash = `sha256-${btoa(binary)}`;
-  return cachedScriptHash;
-}
 function formText(form, field) {
   const value = form.get(field);
   return typeof value === "string" ? value : "";
 }
-function adminHtml(body, scriptHashes = []) {
-  return html(body, { headers: adminSecurityHeaders(scriptHashes) });
+function adminHtml(body) {
+  return html(body, { headers: adminSecurityHeaders() });
+}
+function scriptResponse(source) {
+  return new Response(source, {
+    headers: {
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
+      "X-Content-Type-Options": "nosniff"
+    }
+  });
 }
 function signatureOptionsFor(url, slug, hasLogo, hasCover) {
   return { origin: url.origin, slug, hasLogo, hasCover };
@@ -1800,8 +2322,13 @@ async function handleSignature(request, env, url) {
   if (baseSlug !== config.slug) return null;
   const asset = segments[2];
   const headers = publicSecurityHeaders();
-  if (asset === "logo.png" || asset === "cover.jpg") {
-    const key = asset === "logo.png" ? "logo" : "cover";
+  const PUBLIC_ASSETS = {
+    "logo.png": "logo",
+    "nav-logo.png": "logo-nav",
+    "cover.jpg": "cover"
+  };
+  if (asset !== void 0 && asset in PUBLIC_ASSETS) {
+    const key = PUBLIC_ASSETS[asset];
     const image = await getImage(env, key);
     return image === null ? emptyImage(headers) : imageResponse(image, request, {
       "Cross-Origin-Resource-Policy": "cross-origin",
@@ -1832,6 +2359,8 @@ async function handleAdmin(request, env, url) {
   const config = readConfig(env);
   const path = url.pathname;
   const method = request.method;
+  if (path === "/admin/js/cropper.js") return scriptResponse(CROPPER_JS);
+  if (path === "/admin/js/copy.js") return scriptResponse(COPY_JS);
   if (path === "/admin/login") {
     if (method === "GET") {
       const existing = await getSession(env, request);
@@ -1840,7 +2369,8 @@ async function handleAdmin(request, env, url) {
         loginPage({
           configured: config.configured,
           error: ERRORS[url.searchParams.get("error") ?? ""] ?? null,
-          notice: NOTICES[url.searchParams.get("ok") ?? ""] ?? null
+          notice: NOTICES[url.searchParams.get("ok") ?? ""] ?? null,
+          logoUrl: await hasImage(env, "logo") ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}` : null
         })
       );
     }
@@ -1851,7 +2381,8 @@ async function handleAdmin(request, env, url) {
         return adminHtml(
           loginPage({
             configured: config.configured,
-            error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`
+            error: `Too many sign-in attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`,
+            logoUrl: await hasImage(env, "logo") ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}` : null
           })
         );
       }
@@ -1862,7 +2393,8 @@ async function handleAdmin(request, env, url) {
         return adminHtml(
           loginPage({
             configured: config.configured,
-            error: config.configured ? "Incorrect username or password." : "This deployment has no administrator configured yet."
+            error: config.configured ? "Incorrect username or password." : "This deployment has no administrator configured yet.",
+            logoUrl: await hasImage(env, "logo") ? `/signature/${config.slug}/logo.png?v=${await getRevision(env)}` : null
           })
         );
       }
@@ -1893,36 +2425,47 @@ async function handleAdmin(request, env, url) {
   const error = ERRORS[url.searchParams.get("error") ?? ""] ?? null;
   const buildContext = async () => {
     const data = await getSignatureData(env);
-    const [logoPresent, coverPresent] = await Promise.all([
+    const [logoPresent, navLogoPresent, coverPresent, originalPresent] = await Promise.all([
       hasImage(env, "logo"),
-      hasImage(env, "cover")
+      hasImage(env, "logo-nav"),
+      hasImage(env, "cover"),
+      hasImage(env, "logo-original")
     ]);
     const options = signatureOptionsFor(url, config.slug, logoPresent, coverPresent);
-    return { data, options, publicUrl: `${url.origin}/signature/${config.slug}` };
+    const navLogoUrl = navLogoPresent ? `/signature/${config.slug}/nav-logo.png?v=${data.revision}` : logoPresent ? `/signature/${config.slug}/logo.png?v=${data.revision}` : null;
+    return {
+      data,
+      options,
+      publicUrl: `${url.origin}/signature/${config.slug}`,
+      navLogoUrl,
+      logoPresent,
+      navLogoPresent,
+      originalPresent
+    };
   };
   if (path === "/admin" && method === "GET") {
-    const { data, options, publicUrl } = await buildContext();
+    const { data, options, publicUrl, navLogoUrl } = await buildContext();
     return adminHtml(
-      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error })
+      dashboardPage({ data, signatureOptions: options, publicUrl, notice, error, navLogoUrl })
     );
   }
   if (path === "/admin/signature" && method === "GET") {
-    const { data, options, publicUrl } = await buildContext();
+    const { data, options, publicUrl, navLogoUrl } = await buildContext();
     return adminHtml(
       signaturePage({
         data,
         signatureOptions: options,
         publicUrl,
         signatureHtml: renderSignatureHtml(data, options),
-        notice
-      }),
-      [await copyScriptHash()]
+        notice,
+        navLogoUrl
+      })
     );
   }
   if (path === "/admin/book") {
     if (method === "GET") {
       const rawQuery = url.searchParams.get("q");
-      const current = await getCurrentBook(env);
+      const [current, { navLogoUrl }] = await Promise.all([getCurrentBook(env), buildContext()]);
       if (rawQuery === null) {
         return adminHtml(
           bookPage({
@@ -1934,7 +2477,8 @@ async function handleAdmin(request, env, url) {
             errors: {},
             notice,
             error,
-            current
+            current,
+            navLogoUrl
           })
         );
       }
@@ -1948,7 +2492,8 @@ async function handleAdmin(request, env, url) {
             warnings: [],
             searched: false,
             errors: validated.errors,
-            current
+            current,
+            navLogoUrl
           })
         );
       }
@@ -1962,7 +2507,8 @@ async function handleAdmin(request, env, url) {
             warnings: [],
             searched: false,
             errors: { query: "Too many searches. Please wait a moment." },
-            current
+            current,
+            navLogoUrl
           })
         );
       }
@@ -1977,7 +2523,8 @@ async function handleAdmin(request, env, url) {
           errors: {},
           notice,
           error,
-          current
+          current,
+          navLogoUrl
         })
       );
     }
@@ -2026,12 +2573,15 @@ async function handleAdmin(request, env, url) {
   }
   if (path === "/admin/profile") {
     if (method === "GET") {
-      const { data } = await buildContext();
+      const context = await buildContext();
       return adminHtml(
         profilePage({
           csrfToken,
-          data,
-          hasLogo: await hasImage(env, "logo"),
+          data: context.data,
+          hasLogo: context.logoPresent,
+          hasNavLogo: context.navLogoPresent,
+          hasOriginal: context.originalPresent,
+          navLogoUrl: context.navLogoUrl,
           errors: {},
           notice,
           error
@@ -2044,12 +2594,15 @@ async function handleAdmin(request, env, url) {
       if (blocked !== null) return blocked;
       const validated = validateProfile(form);
       if (!validated.ok || validated.value === void 0) {
-        const { data } = await buildContext();
+        const context = await buildContext();
         return adminHtml(
           profilePage({
             csrfToken,
-            data,
-            hasLogo: await hasImage(env, "logo"),
+            data: context.data,
+            hasLogo: context.logoPresent,
+            hasNavLogo: context.navLogoPresent,
+            hasOriginal: context.originalPresent,
+            navLogoUrl: context.navLogoUrl,
             errors: validated.errors,
             error: "Please correct the highlighted fields."
           })
@@ -2064,14 +2617,18 @@ async function handleAdmin(request, env, url) {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
+    const target = formText(form, "target") === "logo-nav" ? "logo-nav" : "logo";
     const validated = await validateImageUpload(form.get("logo"));
     if (!validated.ok || validated.value === void 0) {
-      const { data } = await buildContext();
+      const context = await buildContext();
       return adminHtml(
         profilePage({
           csrfToken,
-          data,
-          hasLogo: await hasImage(env, "logo"),
+          data: context.data,
+          hasLogo: context.logoPresent,
+          hasNavLogo: context.navLogoPresent,
+          hasOriginal: context.originalPresent,
+          navLogoUrl: context.navLogoUrl,
           errors: validated.errors,
           error: "The logo could not be uploaded."
         })
@@ -2079,11 +2636,32 @@ async function handleAdmin(request, env, url) {
     }
     await putImage(
       env,
-      "logo",
+      target,
       validated.value.contentType,
       validated.value.bytes,
-      await sha256Hex(`logo:${validated.value.bytes.byteLength}:${Date.now()}`)
+      await sha256Hex(`${target}:${validated.value.bytes.byteLength}:${Date.now()}`)
     );
+    const originalField = form.get("logoOriginal");
+    if (originalField instanceof File && originalField.size > 0) {
+      const original = await validateImageUpload(originalField);
+      if (original.ok && original.value !== void 0) {
+        await putImage(
+          env,
+          "logo-original",
+          original.value.contentType,
+          original.value.bytes,
+          await sha256Hex(`original:${original.value.bytes.byteLength}:${Date.now()}`)
+        );
+      }
+    } else if (!await hasImage(env, "logo-original")) {
+      await putImage(
+        env,
+        "logo-original",
+        validated.value.contentType,
+        validated.value.bytes,
+        await sha256Hex(`original:${validated.value.bytes.byteLength}:${Date.now()}`)
+      );
+    }
     await bumpRevision(env);
     return redirect("/admin/profile?ok=logo-saved");
   }
@@ -2091,12 +2669,22 @@ async function handleAdmin(request, env, url) {
     const form = await request.formData();
     const blocked = await guardMutation(form);
     if (blocked !== null) return blocked;
-    await deleteImage(env, "logo");
+    await Promise.all([
+      deleteImage(env, "logo"),
+      deleteImage(env, "logo-nav"),
+      deleteImage(env, "logo-original")
+    ]);
     await bumpRevision(env);
     return redirect("/admin/profile?ok=logo-removed");
   }
-  if (path === "/admin/image/cover" || path === "/admin/image/logo") {
-    const key = path.endsWith("logo") ? "logo" : "cover";
+  const ADMIN_IMAGES = {
+    "/admin/image/cover": "cover",
+    "/admin/image/logo": "logo",
+    "/admin/image/logo-nav": "logo-nav",
+    "/admin/image/logo-original": "logo-original"
+  };
+  if (path in ADMIN_IMAGES) {
+    const key = ADMIN_IMAGES[path];
     const image = await getImage(env, key);
     const headers = { "Cross-Origin-Resource-Policy": "same-origin" };
     return image === null ? emptyImage(headers) : imageResponse(image, request, headers);

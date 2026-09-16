@@ -12,6 +12,12 @@ import { calculateSchoolYear } from '../../shared/schoolYear';
 import { layout } from './layout';
 import { renderSignatureHtml, type SignatureOptions } from '../signature';
 
+/** Chrome shared by every page that renders the masthead. */
+export interface ChromeOptions {
+  /** Public URL of the navigation crop, shown centred and whitened in the masthead. */
+  navLogoUrl?: string | null;
+}
+
 /** Hidden CSRF input, included in every form that changes state. */
 function csrfField(token: string): string {
   return `<input type="hidden" name="csrf" value="${escapeHtml(token)}" />`;
@@ -32,6 +38,8 @@ export interface LoginPageOptions {
   error?: string | null;
   notice?: string | null;
   configured: boolean;
+  /** Public URL of the full-colour logo, shown above the sign-in card. */
+  logoUrl?: string | null;
 }
 
 export function loginPage(options: LoginPageOptions): string {
@@ -45,7 +53,13 @@ export function loginPage(options: LoginPageOptions): string {
 
   const body = `<div class="login-wrap">
   <div class="login-card">
-    <div class="login-crest">Berkhamsted<span>Reading signature</span></div>
+    <div class="login-crest">
+      ${
+        options.logoUrl
+          ? `<img src="${escapeHtml(options.logoUrl)}" alt="Berkhamsted School" />`
+          : '<span class="wordmark">Berkhamsted<span>Reading signature</span></span>'
+      }
+    </div>
     ${setupWarning}
     ${options.error ? `<div class="banner bad" role="alert">${escapeHtml(options.error)}</div>` : ''}
     ${options.notice ? `<div class="banner ok" role="status">${escapeHtml(options.notice)}</div>` : ''}
@@ -74,7 +88,7 @@ export function loginPage(options: LoginPageOptions): string {
 
 // --- Dashboard -----------------------------------------------------------
 
-export interface DashboardPageOptions {
+export interface DashboardPageOptions extends ChromeOptions {
   data: SignatureData;
   signatureOptions: SignatureOptions;
   publicUrl: string;
@@ -167,6 +181,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
   return layout(body, {
     title: 'Dashboard',
     active: 'dashboard',
+    navLogoUrl: options.navLogoUrl ?? null,
     notice: options.notice ?? null,
     error: options.error ?? null,
   });
@@ -174,7 +189,7 @@ export function dashboardPage(options: DashboardPageOptions): string {
 
 // --- Change book ---------------------------------------------------------
 
-export interface BookPageOptions {
+export interface BookPageOptions extends ChromeOptions {
   csrfToken: string;
   query: string;
   results: BookSearchResult[];
@@ -319,6 +334,7 @@ ${
   return layout(body, {
     title: 'Change book',
     active: 'book',
+    navLogoUrl: options.navLogoUrl ?? null,
     notice: options.notice ?? null,
     error: options.error ?? null,
   });
@@ -326,10 +342,15 @@ ${
 
 // --- Profile -------------------------------------------------------------
 
-export interface ProfilePageOptions {
+export interface ProfilePageOptions extends ChromeOptions {
   csrfToken: string;
   data: SignatureData;
+  /** Whether a signature crop exists. */
   hasLogo: boolean;
+  /** Whether a navigation crop exists. */
+  hasNavLogo: boolean;
+  /** Whether the untouched upload is still held, so it can be re-cropped. */
+  hasOriginal: boolean;
   errors: Record<string, string>;
   notice?: string | null;
   error?: string | null;
@@ -416,32 +437,114 @@ export function profilePage(options: ProfilePageOptions): string {
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" id="logo-cropper">
   <h2>Berkhamsted logo</h2>
   <p style="color:var(--muted);font-size:0.9rem;">
-    Upload the official logo as a PNG. It is stored here and served from this Worker, so the
-    signature does not depend on any other host. Until one is uploaded the signature shows a
-    marked placeholder rather than a broken image.
+    Upload the logo once, then crop it twice: the full crest for your email signature, and a
+    tighter crop of just the wordmark for the bar at the top of this site. The navigation crop is
+    recoloured white automatically, so a navy logo reads against the navy bar.
   </p>
-  ${
-    options.hasLogo
-      ? `<p><img src="/admin/image/logo?v=${options.data.revision}" alt="Current logo"
-              style="max-width:240px;border:1px solid var(--rule);border-radius:2px;background:var(--navy);padding:0.5rem;" /></p>`
-      : '<div class="banner info">No logo uploaded yet.</div>'
-  }
-  <form method="post" action="/admin/logo" enctype="multipart/form-data">
-    ${csrfField(csrfToken)}
-    <div class="field">
-      <label for="logo">Logo file</label>
-      <input type="file" id="logo" name="logo" accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, 'logo')} />
-      ${fieldError(errors, 'logo')}
-      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Around 600px wide works best.</p>
+
+  <div class="logo-slots">
+    <div class="logo-slot">
+      <h3>Signature</h3>
+      <p class="hint" style="margin:0;">Shown in your email signature, at 150px wide on white.</p>
+      <div class="surface">
+        ${
+          options.hasLogo
+            ? `<img src="/admin/image/logo?v=${options.data.revision}" alt="Current signature logo" />`
+            : '<span class="empty">Nothing uploaded yet</span>'
+        }
+      </div>
+      ${
+        options.hasOriginal
+          ? `<button class="btn secondary small" type="button" id="crop-recrop"
+                     data-src="/admin/image/logo-original?v=${options.data.revision}"
+                     data-target="logo">Re-crop for signature</button>`
+          : ''
+      }
     </div>
-    <button class="btn" type="submit">Upload logo</button>
+
+    <div class="logo-slot">
+      <h3>Navigation bar</h3>
+      <p class="hint" style="margin:0;">Crop out the rose and keep the wordmark. Shown in white.</p>
+      <div class="surface on-navy">
+        ${
+          options.hasNavLogo
+            ? `<img src="/admin/image/logo-nav?v=${options.data.revision}" alt="Current navigation logo" />`
+            : '<span class="empty" style="color:rgba(255,255,255,0.7);">Nothing cropped yet</span>'
+        }
+      </div>
+      ${
+        options.hasOriginal
+          ? `<button class="btn secondary small" type="button" id="crop-recrop-nav"
+                     data-src="/admin/image/logo-original?v=${options.data.revision}"
+                     data-target="logo-nav">Re-crop for navigation</button>`
+          : ''
+      }
+    </div>
+  </div>
+
+  <form method="post" action="/admin/logo" enctype="multipart/form-data" id="logo-form" style="margin-top:1.5rem;">
+    ${csrfField(csrfToken)}
+    <input type="hidden" name="target" id="crop-target" value="logo" />
+    <div class="field">
+      <label for="logo-file">Upload a logo</label>
+      <input type="file" id="logo-file" name="logo"
+             accept="image/png,image/jpeg,image/gif,image/webp"${invalidAttr(errors, 'logo')} />
+      ${fieldError(errors, 'logo')}
+      <p class="hint">PNG, JPEG, GIF or WebP, up to 1.5MB. Transparent PNG works best.</p>
+    </div>
+
+    <button class="btn" type="submit" id="logo-submit">Upload logo</button>
+
+    <div id="crop-panel" hidden>
+      <div class="field">
+        <label id="crop-heading">Crop</label>
+        <div class="crop-stage" id="crop-stage">
+          <img id="crop-image" alt="" />
+          <div class="crop-box" id="crop-box" tabindex="0" role="application"
+               aria-label="Crop area. Arrow keys move it, hold Alt and use arrow keys to resize.">
+            <span class="crop-handle" data-handle="nw"></span>
+            <span class="crop-handle" data-handle="n"></span>
+            <span class="crop-handle" data-handle="ne"></span>
+            <span class="crop-handle" data-handle="e"></span>
+            <span class="crop-handle" data-handle="se"></span>
+            <span class="crop-handle" data-handle="s"></span>
+            <span class="crop-handle" data-handle="sw"></span>
+            <span class="crop-handle" data-handle="w"></span>
+          </div>
+        </div>
+        <p class="hint" id="crop-dims"></p>
+        <p class="hint" id="crop-status" role="status"></p>
+      </div>
+
+      <div class="crop-previews">
+        <div class="crop-preview-pane">
+          <div class="crop-preview-label">On white, as in the signature</div>
+          <div class="crop-preview-surface on-white">
+            <img id="crop-preview" alt="Preview of the cropped logo" />
+          </div>
+        </div>
+        <div class="crop-preview-pane">
+          <div class="crop-preview-label">On navy, as in the top bar</div>
+          <div class="crop-preview-surface on-navy">
+            <img id="crop-preview-navy" alt="Preview of the cropped logo in white" />
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit" id="crop-save">Save crop</button>
+        <button class="btn secondary small" type="button" id="crop-reset">Reset crop</button>
+        <button class="btn secondary small" type="button" id="crop-cancel">Cancel</button>
+      </div>
+    </div>
   </form>
+
   ${
-    options.hasLogo
-      ? `<form method="post" action="/admin/logo/delete" style="margin-top:0.75rem;">
+    options.hasLogo || options.hasNavLogo
+      ? `<form method="post" action="/admin/logo/delete" style="margin-top:1rem;">
            ${csrfField(csrfToken)}
            <button class="btn secondary small" type="submit">Remove logo</button>
          </form>`
@@ -452,6 +555,8 @@ export function profilePage(options: ProfilePageOptions): string {
   return layout(body, {
     title: 'Profile',
     active: 'profile',
+    navLogoUrl: options.navLogoUrl ?? null,
+    scripts: ['/admin/js/cropper.js'],
     notice: options.notice ?? null,
     error: options.error ?? null,
   });
@@ -459,7 +564,7 @@ export function profilePage(options: ProfilePageOptions): string {
 
 // --- Signature -----------------------------------------------------------
 
-export interface SignaturePageOptions {
+export interface SignaturePageOptions extends ChromeOptions {
   data: SignatureData;
   signatureOptions: SignatureOptions;
   publicUrl: string;
@@ -564,6 +669,7 @@ export function signaturePage(options: SignaturePageOptions): string {
     title: 'Signature',
     active: 'signature',
     notice: options.notice ?? null,
-    head: `<script>${COPY_SCRIPT}</script>`,
+    navLogoUrl: options.navLogoUrl ?? null,
+    scripts: ['/admin/js/copy.js'],
   });
 }

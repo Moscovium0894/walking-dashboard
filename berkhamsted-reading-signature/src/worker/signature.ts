@@ -24,7 +24,8 @@ export const BRAND = {
   navy: '#0A2142',
   gold: '#EFC486',
   rose: '#C1272D',
-  cream: '#F7F4ED',
+  /** Very light neutral for placeholder fills. The page itself is white. */
+  wash: '#F6F7F9',
   ink: '#1F2937',
   muted: '#5A6473',
   rule: '#D9D3C7',
@@ -213,7 +214,7 @@ export function renderSignatureHtml(data: SignatureData, options: SignatureOptio
 function placeholderBox(width: number, height: number, label: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${width}" style="border-collapse:collapse;width:${width}px;">
                 <tr>
-                  <td align="center" valign="middle" height="${height}" style="height:${height}px;border:1px dashed ${BRAND.rule};background-color:${BRAND.cream};font-family:${SANS};font-size:9px;letter-spacing:1px;color:${BRAND.muted};">
+                  <td align="center" valign="middle" height="${height}" style="height:${height}px;border:1px dashed ${BRAND.rule};background-color:${BRAND.wash};font-family:${SANS};font-size:9px;letter-spacing:1px;color:${BRAND.muted};">
                     ${escapeHtml(label)}
                   </td>
                 </tr>
@@ -240,7 +241,7 @@ export function renderSignatureDocument(
 <meta name="robots" content="noindex, nofollow" />
 <title>${escapeHtml(title)}</title>
 </head>
-<body style="margin:0;padding:24px;background-color:${BRAND.cream};">
+<body style="margin:0;padding:24px;background-color:#FFFFFF;">
 ${renderSignatureHtml(data, options)}
 </body>
 </html>`;

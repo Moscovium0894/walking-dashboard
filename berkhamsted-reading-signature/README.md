@@ -69,8 +69,10 @@ Email client ──▶ /signature/otto/cover.jpg   (bytes served from D1, never 
 |---|---|---|
 | `/signature/otto` | public | the signature as an HTML document |
 | `/signature/otto.txt` | public | plain-text fallback |
-| `/signature/otto/logo.png` | public | the logo, from D1 |
+| `/signature/otto/logo.png` | public | the signature logo, from D1 |
+| `/signature/otto/nav-logo.png` | public | the navigation crop, from D1 |
 | `/signature/otto/cover.jpg` | public | the current cover, from D1 |
+| `/admin/js/*.js` | public | the two progressive-enhancement scripts |
 | `/admin` | private | dashboard |
 | `/admin/book` | private | search and change book |
 | `/admin/profile` | private | profile and logo |
@@ -99,7 +101,10 @@ src/
     rateLimit.ts     fixed-window limiting, in D1
     security.ts      response helpers and security headers
     validate.ts      input validation
-    ui/              the admin pages
+    ui/
+      layout.ts        page shell, navigation and stylesheet
+      pages.ts         the four admin pages
+      clientScripts.ts the logo cropper and copy button
 migrations/          D1 migrations
 dist/worker.js       the built single-file bundle (committed, see below)
 ```
@@ -165,7 +170,7 @@ store a year group — that is calculated on every read.
 |---|---|
 | `profile` | one row: name, date of birth, house, school, subtitle, visibility flags |
 | `current_book` | one row: title, author, cover URL, ISBN, year, source |
-| `images` | the logo and cover bytes, so no third-party image host is needed |
+| `images` | logo, navigation crop, original upload and cover bytes |
 | `settings` | the revision counter used for cache busting |
 | `sessions` | hashed session and CSRF tokens |
 | `rate_limit` | fixed-window counters |
@@ -265,20 +270,46 @@ the walking-dashboard application and cannot affect its workflows.
 ## 8. Uploading the logo
 
 The logo is **not** in this repository, and this project will not generate or
-download a substitute.
+download a substitute. Upload it yourself: sign in, go to **Profile →
+Berkhamsted logo**, and choose the file.
 
-Sign in, go to **Profile → Berkhamsted logo**, and upload the official PNG. It
-is stored in D1 and served from `/signature/otto/logo.png`, so the signature
-does not depend on any other host.
+It is stored in D1 and served from this Worker, so the signature depends on no
+other host. PNG, JPEG, GIF or WebP up to 1.5MB; a transparent PNG is ideal. The
+file type is verified from its actual bytes, not from its name or the type the
+browser claims.
 
-PNG, JPEG, GIF or WebP up to 1.5MB. Around 600px wide is ideal — it displays at
-150px, so that stays sharp on high-DPI screens. The file type is verified from
-its actual bytes, not the name or the browser-supplied type.
+### Cropping
 
-Until a logo is uploaded, the signature shows a dashed box marked `LOGO` rather
-than a broken image.
+One upload, two crops, because the logo is used in two places that want
+different things:
 
----
+| Crop | Where it appears | Treatment |
+|---|---|---|
+| **Signature** | your email signature, 150px wide | full colour on white |
+| **Navigation bar** | the masthead of this site | recoloured white |
+
+Choose a file and the cropper opens on the whole image. Drag a handle to resize
+the crop, drag inside it to move it, or drag on the image outside the box to
+draw a new region. Arrow keys nudge it; hold Alt and use the arrow keys to
+resize. Two live previews show the result on white and on navy.
+
+The untouched upload is kept, so **Re-crop for signature** and **Re-crop for
+navigation** let you adjust either crop later without finding the file again.
+
+For a crest with a device above a wordmark, the usual choice is the whole logo
+for the signature and just the wordmark for the navigation bar, since the device
+is illegible at 44px tall.
+
+**Why white?** The masthead is navy. The recolouring is a CSS filter
+(`brightness(0) invert(1)`) which flattens every opaque pixel to white and
+leaves the alpha channel alone, so a transparent navy crest reads cleanly. It
+suits a single-colour logo; a multicoloured one will flatten to a white
+silhouette.
+
+The cropper is progressive enhancement. With JavaScript disabled the form still
+uploads the file, uncropped, as the signature logo. Until anything is uploaded
+the signature shows a dashed box marked `LOGO` rather than a broken image, and
+the masthead falls back to a text wordmark.
 
 ## 9. Signing in
 

@@ -143,8 +143,15 @@ export async function setCurrentBook(
 
 // --- Stored images -------------------------------------------------------
 
-/** Images we hold bytes for, and therefore serve from our own origin. */
-export type ImageKey = 'cover' | 'logo';
+/**
+ * Images we hold bytes for, and therefore serve from our own origin.
+ *
+ * 'logo'          the crop used in the email signature, full colour on white.
+ * 'logo-nav'      a tighter crop for the site masthead, recoloured white in CSS.
+ * 'logo-original' the untouched upload, kept so either crop can be redone
+ *                 later without asking for the file again.
+ */
+export type ImageKey = 'cover' | 'logo' | 'logo-nav' | 'logo-original';
 
 export interface StoredImage {
   contentType: string;
